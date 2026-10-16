@@ -4,8 +4,9 @@ Ferramenta de linha de comando (CLI) em Python com utilitários para profissiona
 infraestrutura e segurança defensiva. Roda 100% local, sem rede, sem serviços externos e sem
 privilégios administrativos.
 
-> **Estado atual (v0.1.0):** apenas a **calculadora de sub-redes** está implementada.
-> Auditoria de firewall, análise de logs e relatórios HTML estão no [roadmap](#roadmap).
+> **Estado atual (v0.2.0):** **calculadora de sub-redes** e **auditoria de regras de
+> firewall** estão implementadas. Análise de logs e relatórios HTML estão no
+> [roadmap](#roadmap).
 
 ## Problema que o projeto resolve
 
@@ -19,7 +20,7 @@ para humanos e em JSON para automação.
 | Módulo | Comando | Estado |
 |---|---|---|
 | Planejamento de redes IP (IPv4/IPv6) | `netops subnet` | Implementado |
-| Auditoria de regras de firewall | `netops firewall audit` | Planejado |
+| Auditoria de regras de firewall (JSON/YAML) | `netops firewall audit` | Implementado |
 | Análise de logs de segurança | `netops logs analyze` | Planejado |
 | Relatórios HTML | `netops report html` | Planejado |
 
@@ -37,10 +38,28 @@ para humanos e em JSON para automação.
 - Aceita endereço de host (ex.: `192.168.10.77/24`), calcula a rede e avisa.
 - Saída em JSON com `--json`.
 
+### Auditoria de regras de firewall
+
+Analisa regras **fictícias**, escritas em um formato documentado pelo projeto
+([docs/firewall-format.md](docs/firewall-format.md)). Não se conecta a nenhum firewall real.
+
+- Valida a estrutura e cada campo: endereços, redes CIDR, portas, protocolos, ações e IDs
+  duplicados. Também trata armadilhas do YAML, como `22:80` virar o número 1360.
+- Detecta permissões *any → any*, serviços sensíveis expostos (SSH, RDP, bancos de dados
+  etc.), faixas amplas de portas, protocolos sem criptografia, origens muito amplas, regras
+  duplicadas, regras sombreadas por outra com ação oposta, regras redundantes e ausência de
+  negação padrão.
+- Separa **erros objetivos**, **alertas heurísticos** e **recomendações**, cada um com
+  severidade (`critical` a `info`), motivo e sugestão de correção.
+- Exporta em JSON (`--json` ou `--output`), sem sobrescrever arquivos sem `--overwrite`.
+- `--fail-on <severidade>` retorna o código 3 quando há achado igual ou acima dela (útil
+  em CI).
+
 ## Tecnologias
 
 - Python 3.12+ (módulo `ipaddress` da biblioteca padrão)
 - [Typer](https://typer.tiangolo.com/) para a CLI
+- PyYAML (somente `SafeLoader`) para arquivos YAML
 - pytest para testes
 - Ruff para lint e formatação
 
@@ -90,9 +109,13 @@ netops --version
 netops subnet 192.168.10.0/24
 netops subnet 192.168.10.0/24 --json
 netops subnet 2001:db8:abcd:12::/64
+netops firewall audit examples/firewall-rules.json
+netops firewall audit examples/firewall-rules-issues.yaml --json
+netops firewall audit examples/firewall-rules-issues.yaml --output resultado.json
+netops firewall audit examples/firewall-rules-issues.yaml --fail-on high
 ```
 
-### Exemplos de entrada e saída
+### Exemplos: calculadora de sub-redes
 
 IPv4 /24:
 
@@ -186,13 +209,68 @@ Erro: prefixo inválido: /33. IPv4 aceita prefixos de 0 a 32
 O formato do JSON e as regras de cálculo estão em
 [docs/subnet-calculator.md](docs/subnet-calculator.md).
 
+### Exemplos: auditoria de firewall
+
+Configuração de referência (`examples/firewall-rules.json`), sem achados:
+
+```text
+> netops firewall audit examples/firewall-rules.json
+Auditoria de firewall: firewall-rules.json
+Regras: 13 (válidas: 13, inválidas: 0, desabilitadas: 0)
+Achados: 0  |  crítica: 0  alta: 0  média: 0  baixa: 0  info: 0
+Por categoria: erro objetivo: 0  alerta heurístico: 0  recomendação: 0
+
+Nenhum achado.
+...
+```
+
+Arquivo com problemas propositais (`examples/firewall-rules-issues.yaml`). Trecho da saída
+real, com 4 dos 19 achados:
+
+```text
+> netops firewall audit examples/firewall-rules-issues.yaml
+Auditoria de firewall: firewall-rules-issues.yaml
+Regras: 19 (válidas: 13, inválidas: 6, desabilitadas: 1)
+Achados: 19  |  crítica: 1  alta: 7  média: 5  baixa: 4  info: 2
+Por categoria: erro objetivo: 9  alerta heurístico: 6  recomendação: 4
+
+[CRÍTICA] FW002 Permissão de qualquer origem para qualquer destino  (regra: allow-all-test)
+  Tipo: alerta heurístico
+  Motivo: A regra 'allow-all-test' permite todo o tráfego (qualquer protocolo) de qualquer
+  origem para qualquer destino. Na prática, ela desativa a filtragem para esse tráfego e
+  anula as regras posteriores que ela cobre.
+  Sugestão: Restrinja origem, destino e serviços ao mínimo necessário. ...
+
+[ALTA] FW003 Serviço sensível acessível de qualquer origem  (regra: ssh-from-internet)
+  Tipo: alerta heurístico
+  Motivo: A regra 'ssh-from-internet' permite acesso a SSH (tcp/22) de qualquer origem. ...
+
+[ALTA] FW001 Regra inválida  (regra: yaml-sexagesimal)
+  Tipo: erro objetivo
+  Motivo: Porta inválida: '22:80'. Use '-' para faixas (ex.: '22-80').
+
+[MÉDIA] FW009 Regra sombreada por outra com ação oposta  (regra: guest-printer, block-guest-wifi)
+  Tipo: erro objetivo
+  Motivo: A regra 'guest-printer' (allow) nunca será aplicada: a regra 'block-guest-wifi'
+  (deny), na posição 8, já cobre todo o tráfego dela. ...
+...
+Atenção: alertas heurísticos indicam pontos a verificar, não falhas confirmadas.
+Avalie cada achado no contexto do ambiente.
+```
+
+(As linhas longas foram quebradas aqui para facilitar a leitura.)
+
+O formato das regras, os 14 critérios de detecção (FW001 a FW014), as severidades e as
+limitações estão em [docs/firewall-format.md](docs/firewall-format.md).
+
 ### Códigos de saída
 
 | Código | Significado |
 |---|---|
-| `0` | Sucesso |
-| `1` | Dado de entrada inválido (endereço ou prefixo) |
+| `0` | Sucesso (em auditorias: análise concluída, mesmo com achados) |
+| `1` | Entrada inválida (endereço, prefixo, arquivo ilegível) ou destino de `--output` inválido |
 | `2` | Erro de uso (argumento ausente, opção ou comando inexistente) |
+| `3` | Auditoria com achado igual ou acima da severidade de `--fail-on` |
 
 ## Testes e qualidade
 
@@ -212,47 +290,63 @@ netops-toolkit/
 ├── docs/
 │   ├── architecture.md       # visão geral da arquitetura
 │   ├── decisions.md          # registro das decisões técnicas
+│   ├── firewall-format.md    # formato das regras e critérios de detecção
 │   ├── subnet-calculator.md  # regras de cálculo e formato JSON
 │   └── testing.md            # como e o que é testado
+├── examples/
+│   ├── firewall-rules.json         # configuração de referência (sem achados)
+│   └── firewall-rules-issues.yaml  # problemas propositais (FW001 a FW014)
 ├── src/netops_toolkit/
 │   ├── __init__.py           # versão do pacote
 │   ├── __main__.py           # python -m netops_toolkit
 │   ├── cli.py                # interface Typer (apenas apresentação)
-│   └── network.py            # cálculo de sub-redes (lógica pura)
+│   ├── models.py             # Finding, Severity, Category, AuditResult
+│   ├── network.py            # cálculo de sub-redes (lógica pura)
+│   └── firewall/
+│       ├── loader.py         # leitura segura de JSON/YAML
+│       ├── schema.py         # modelo das regras e validação
+│       └── checks.py         # detecções e auditoria
 ├── tests/
 │   ├── test_cli.py
+│   ├── test_firewall.py
 │   └── test_network.py
+├── .gitattributes
 ├── .gitignore
 ├── LICENSE
 ├── pyproject.toml
 └── README.md
 ```
 
-Novos arquivos (`firewall.py`, `logs.py`, `reports.py`, `examples/`, CI) serão adicionados
-nas fases correspondentes.
+Novos arquivos (`logs.py`, `reports.py`, CI) serão adicionados nas fases correspondentes.
 
 ## Limitações conhecidas
 
-- Apenas a calculadora de sub-redes está disponível.
+- Análise de logs e relatórios HTML ainda não estão disponíveis.
 - O prefixo precisa ser informado em notação CIDR (`/24`); máscara decimal
   (`/255.255.255.0`) é recusada de propósito.
 - A classificação do tipo de endereço usa o módulo `ipaddress`; versões diferentes do
   Python podem classificar alguns blocos especiais de forma ligeiramente diferente.
 - Ainda não há planejamento de múltiplas sub-redes (VLSM).
+- Auditoria de firewall: formato próprio (não lê configurações de fabricantes), análise só
+  de porta de destino, cobertura pela união de várias regras não é detectada, sobreposição
+  parcial com ações opostas não é apontada, e a lista de serviços sensíveis é fixa. Detalhes
+  em [docs/firewall-format.md](docs/firewall-format.md#4-limitações-e-falsos-positivosnegativos-conhecidos).
 
 ## Aviso sobre auditorias
 
-Os módulos de auditoria (firewall e logs), quando implementados, vão gerar **indicadores
-para investigação**, não conclusões definitivas. Uma regra "ampla" ou uma sequência de
-falhas de login pode ser legítima no contexto do seu ambiente. Os resultados sempre
-precisam de interpretação humana.
+Os módulos de auditoria geram **indicadores para investigação**, não conclusões
+definitivas. Uma regra "ampla" ou uma sequência de falhas de login pode ser legítima no
+contexto do seu ambiente. Por isso a auditoria de firewall separa erros objetivos de
+alertas heurísticos e recomendações. Os resultados sempre precisam de interpretação humana.
 
 ## Roadmap
 
 - [x] Fase 1 — Fundação (pacote, CLI, testes, lint)
 - [x] Fase 2 — Calculadora de sub-redes IPv4/IPv6 com saída JSON
 - [ ] Fase 2+ — Planejamento de múltiplas sub-redes (VLSM)
-- [ ] Fase 3 — Auditoria de regras de firewall (JSON/YAML)
+- [x] Fase 3 — Auditoria de regras de firewall (JSON/YAML)
+- [ ] Fase 3+ — Lista de serviços sensíveis e limites configuráveis; detecção de cobertura
+  pela união de regras
 - [ ] Fase 4 — Análise de logs de segurança (JSON Lines)
 - [ ] Fase 5 — Relatórios JSON/HTML compartilhados
 - [ ] Fase 6 — GitHub Actions, revisão final e instalação limpa

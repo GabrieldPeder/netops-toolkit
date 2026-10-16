@@ -3,21 +3,39 @@
 A CLI só valida argumentos, chama a lógica dos módulos e formata a saída.
 
 Códigos de saída:
-    0  sucesso
-    1  dado de entrada inválido (ex.: endereço IP malformado)
+    0  sucesso (em auditorias: análise concluída, mesmo com achados)
+    1  dado de entrada inválido (ex.: endereço IP malformado, arquivo ilegível)
     2  erro de uso (opção inexistente, argumento ausente) - gerado pelo Click
+    3  auditoria com achado igual ou acima do limite de --fail-on
 """
 
 from __future__ import annotations
 
-from typing import Annotated
+from pathlib import Path
+from typing import Annotated, NoReturn
 
 import typer
 
 from netops_toolkit import __version__
+from netops_toolkit.firewall import RulesFileError, audit_file
+from netops_toolkit.models import AuditResult, Category, Severity
 from netops_toolkit.network import SubnetError, SubnetInfo, calculate_subnet
 
 EXIT_INPUT_ERROR = 1
+EXIT_FINDINGS_THRESHOLD = 3
+
+SEVERITY_LABELS = {
+    Severity.CRITICAL: "CRÍTICA",
+    Severity.HIGH: "ALTA",
+    Severity.MEDIUM: "MÉDIA",
+    Severity.LOW: "BAIXA",
+    Severity.INFO: "INFO",
+}
+CATEGORY_LABELS = {
+    Category.ERROR: "erro objetivo",
+    Category.WARNING: "alerta heurístico",
+    Category.RECOMMENDATION: "recomendação",
+}
 
 ADDRESS_TYPE_LABELS = {
     "default": "rota padrão (todos os endereços)",
@@ -86,6 +104,121 @@ def subnet(
         raise typer.Exit(code=EXIT_INPUT_ERROR) from None
 
     typer.echo(info.to_json() if json_output else format_subnet(info))
+
+
+firewall_app = typer.Typer(
+    help="Auditoria de regras de firewall em arquivos JSON ou YAML (sem acessar firewalls reais).",
+    no_args_is_help=True,
+)
+app.add_typer(firewall_app, name="firewall")
+
+
+@firewall_app.command("audit")
+def firewall_audit(
+    file: Annotated[
+        Path,
+        typer.Argument(
+            help="Arquivo de regras (.json, .yaml ou .yml).", metavar="ARQUIVO", show_default=False
+        ),
+    ],
+    json_output: Annotated[
+        bool, typer.Option("--json", help="Exibe o resultado completo em JSON.")
+    ] = False,
+    output: Annotated[
+        Path | None,
+        typer.Option(
+            "--output", "-o", help="Grava o resultado em JSON neste arquivo.", metavar="ARQUIVO"
+        ),
+    ] = None,
+    overwrite: Annotated[
+        bool, typer.Option("--overwrite", help="Permite sobrescrever o arquivo de --output.")
+    ] = False,
+    fail_on: Annotated[
+        Severity | None,
+        typer.Option(
+            "--fail-on",
+            help="Retorna código 3 se houver achado com esta severidade ou maior.",
+            case_sensitive=False,
+        ),
+    ] = None,
+) -> None:
+    """Audita regras de firewall e aponta erros, alertas e recomendações."""
+    try:
+        result = audit_file(file)
+    except RulesFileError as exc:
+        _fail(str(exc))
+
+    if output is not None:
+        _write_output(output, result.to_json(), overwrite)
+
+    typer.echo(result.to_json() if json_output else format_audit(result))
+    if output is not None and not json_output:
+        typer.echo(f"\nResultado JSON gravado em: {output}")
+
+    if fail_on is not None and result.has_findings_at_or_above(fail_on):
+        raise typer.Exit(code=EXIT_FINDINGS_THRESHOLD)
+
+
+def format_audit(result: AuditResult) -> str:
+    """Formata o resultado de uma auditoria para leitura no terminal."""
+    stats = result.stats
+    lines = [
+        f"Auditoria de {result.module}: {result.input_file}",
+        f"Regras: {stats.get('rules_total', 0)} "
+        f"(válidas: {stats.get('rules_valid', 0)}, inválidas: {stats.get('rules_invalid', 0)}, "
+        f"desabilitadas: {stats.get('rules_disabled', 0)})",
+    ]
+    by_severity = result.count_by_severity()
+    by_category = result.count_by_category()
+    lines.append(
+        f"Achados: {len(result.findings)}  |  "
+        + "  ".join(f"{SEVERITY_LABELS[s].lower()}: {by_severity[s]}" for s in Severity)
+    )
+    lines.append(
+        "Por categoria: " + "  ".join(f"{CATEGORY_LABELS[c]}: {by_category[c]}" for c in Category)
+    )
+
+    if not result.findings:
+        lines += ["", "Nenhum achado."]
+    for finding in result.findings:
+        rules = f"  (regra: {', '.join(finding.rule_ids)})" if finding.rule_ids else ""
+        lines += [
+            "",
+            f"[{SEVERITY_LABELS[finding.severity]}] {finding.code} {finding.title}{rules}",
+            f"  Tipo: {CATEGORY_LABELS[finding.category]}",
+            f"  Motivo: {finding.description}",
+            f"  Sugestão: {finding.recommendation}",
+        ]
+
+    lines += [
+        "",
+        "Atenção: alertas heurísticos indicam pontos a verificar, não falhas confirmadas.",
+        "Avalie cada achado no contexto do ambiente.",
+    ]
+    return "\n".join(lines)
+
+
+def _write_output(path: Path, content: str, overwrite: bool) -> None:
+    """Grava um arquivo de resultado sem sobrescrever nada por acidente."""
+    if path.is_dir():
+        _fail(f"o destino é uma pasta, não um arquivo: {path}")
+    parent = path.parent if str(path.parent) else Path(".")
+    if not parent.is_dir():
+        _fail(f"a pasta de destino não existe: {parent}")
+    # Modo "x" falha se o arquivo já existir, sem janela entre verificar e criar.
+    mode = "w" if overwrite else "x"
+    try:
+        with path.open(mode, encoding="utf-8", newline="\n") as handle:
+            handle.write(content + "\n")
+    except FileExistsError:
+        _fail(f"o arquivo já existe: {path}. Use --overwrite para substituí-lo")
+    except OSError as exc:
+        _fail(f"não foi possível gravar {path}: {exc.strerror}")
+
+
+def _fail(message: str) -> NoReturn:
+    typer.echo(f"Erro: {message}", err=True)
+    raise typer.Exit(code=EXIT_INPUT_ERROR)
 
 
 def format_subnet(info: SubnetInfo) -> str:

@@ -1,0 +1,156 @@
+# Conjunto de regras FICTÍCIO com problemas propositais, para demonstrar a
+# auditoria. Cada regra indica o código que deve gerar. Endereços públicos
+# usam blocos de documentação (RFC 5737 / RFC 3849).
+version: 1
+name: "Firewall legado - exemplo com problemas"
+# Sem default_policy e sem deny-all no final -> FW011
+
+rules:
+  - id: web-https-in
+    description: "HTTPS público"
+    action: allow
+    protocol: tcp
+    source: any
+    destination: 203.0.113.10
+    ports: [443]
+
+  - id: web-https-in-copy          # FW008: idêntica à anterior
+    description: "HTTPS público (cópia)"
+    action: allow
+    protocol: tcp
+    source: any
+    destination: 203.0.113.10
+    ports: [443]
+
+  - id: ssh-from-internet          # FW003 (SSH de any) + FW013 (sem descrição)
+    action: allow
+    protocol: tcp
+    source: any
+    destination: 203.0.113.20
+    ports: [22]
+
+  - id: telnet-legacy              # FW007: Telnet sem criptografia
+    description: "Switch antigo sem suporte a SSH"
+    action: allow
+    protocol: tcp
+    source: 10.30.0.0/24
+    destination: 10.30.1.5
+    ports: [23]
+
+  - id: app-wide-ports             # FW005: 64.512 portas
+    description: "Aplicação legada com portas dinâmicas"
+    action: allow
+    protocol: tcp
+    source: 10.10.0.0/16
+    destination: 10.10.9.9
+    ports: "1024-65535"
+
+  - id: partner-any-protocol       # FW004: qualquer protocolo
+    description: "Parceiro com acesso irrestrito à rede de integração"
+    action: allow
+    protocol: any
+    source: 198.51.100.0/24
+    destination: 10.10.4.0/24
+
+  - id: vpn-users-typo             # FW006: /7 (provável erro de /8)
+    description: "Usuários de VPN para a intranet"
+    action: allow
+    protocol: tcp
+    source: 10.0.0.0/7
+    destination: 10.10.6.6
+    ports: [443]
+
+  - id: block-guest-wifi
+    description: "Rede de visitantes não acessa a rede interna"
+    action: deny
+    protocol: any
+    source: 10.50.0.0/16
+    destination: any
+
+  - id: guest-printer              # FW009: sombreada pelo deny anterior
+    description: "Visitantes podem imprimir"
+    action: allow
+    protocol: tcp
+    source: 10.50.1.0/24
+    destination: 10.10.7.7
+    ports: [9100]
+
+  - id: web-out
+    description: "Navegação web dos usuários"
+    action: allow
+    protocol: tcp
+    source: 10.10.0.0/16
+    destination: any
+    ports: [80, 443]
+
+  - id: web-out-dev                # FW010: já coberta por web-out
+    description: "Navegação HTTPS da equipe de desenvolvimento"
+    action: allow
+    protocol: tcp
+    source: 10.10.8.0/24
+    destination: any
+    ports: [443]
+
+  - id: old-backup                 # FW012: desabilitada
+    description: "Servidor de backup desativado em 2025"
+    action: allow
+    protocol: tcp
+    source: 10.10.0.0/16
+    destination: 10.10.10.10
+    ports: [873]
+    enabled: false
+
+  - id: bad-port                   # FW001: porta fora do intervalo
+    description: "Porta inválida"
+    action: allow
+    protocol: tcp
+    source: 10.10.0.0/16
+    destination: 10.10.11.11
+    ports: [70000]
+
+  - id: bad-action                 # FW001: ação não suportada
+    description: "Sintaxe de outro fabricante"
+    action: permit
+    protocol: udp
+    source: 10.10.0.0/16
+    destination: 10.10.12.12
+    ports: [514]
+
+  - id: yaml-sexagesimal           # FW001: 22:80 seria lido como 1360 pelo YAML 1.1
+    description: "Faixa escrita com dois-pontos"
+    action: allow
+    protocol: tcp
+    source: 10.20.0.0/24
+    destination: 10.10.13.13
+    ports: 22:80
+
+  - id: typo-field                 # FW014 (campo desconhecido) + FW001 (sem destination)
+    description: "Erro de digitação no nome do campo"
+    action: allow
+    protocol: tcp
+    source: 10.20.0.0/24
+    destnation: 10.10.14.14
+    ports: [8443]
+
+  - id: icmp-with-ports            # FW001: ICMP não tem portas
+    description: "Ping com porta"
+    action: allow
+    protocol: icmp
+    source: 10.20.0.0/24
+    destination: 10.10.0.0/16
+    ports: [7]
+
+  - id: mixed-ip-versions          # FW001: origem IPv4, destino IPv6
+    description: "Nunca casaria"
+    action: allow
+    protocol: tcp
+    source: 10.20.0.0/24
+    destination: "2001:db8:20::/64"
+    ports: [443]
+
+  - id: allow-all-test             # FW002 (crítica): qualquer coisa de qualquer lugar
+    description: "Teste temporário que ficou esquecido"
+    action: allow
+    protocol: any
+    source: any
+    destination: any

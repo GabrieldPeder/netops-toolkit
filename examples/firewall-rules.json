@@ -1,0 +1,121 @@
+{
+  "version": 1,
+  "name": "Firewall de borda - empresa fictícia (configuração de referência)",
+  "default_policy": "deny",
+  "rules": [
+    {
+      "id": "block-known-bad",
+      "description": "Bloqueia uma rede de origem listada como maliciosa (exemplo RFC 5737)",
+      "action": "deny",
+      "protocol": "any",
+      "source": "192.0.2.0/24",
+      "destination": "any"
+    },
+    {
+      "id": "web-https-in",
+      "description": "HTTPS público para o proxy reverso",
+      "action": "allow",
+      "protocol": "tcp",
+      "source": "any",
+      "destination": "203.0.113.10",
+      "ports": [443]
+    },
+    {
+      "id": "web-http-in",
+      "description": "HTTP público, apenas para redirecionar para HTTPS",
+      "action": "allow",
+      "protocol": "tcp",
+      "source": "any",
+      "destination": "203.0.113.10",
+      "ports": [80]
+    },
+    {
+      "id": "web-https-in-v6",
+      "description": "HTTPS público via IPv6 para o proxy reverso",
+      "action": "allow",
+      "protocol": "tcp",
+      "source": "any",
+      "destination": "2001:db8:10::10",
+      "ports": [443]
+    },
+    {
+      "id": "ssh-admin",
+      "description": "SSH somente a partir da rede de gestão",
+      "action": "allow",
+      "protocol": "tcp",
+      "source": "10.20.0.0/24",
+      "destination": "10.10.0.0/16",
+      "ports": [22]
+    },
+    {
+      "id": "rdp-admin",
+      "description": "RDP somente da rede de gestão para servidores Windows",
+      "action": "allow",
+      "protocol": "tcp",
+      "source": "10.20.0.0/24",
+      "destination": "10.10.5.0/24",
+      "ports": [3389]
+    },
+    {
+      "id": "app-to-db",
+      "description": "Servidores de aplicação acessam o PostgreSQL",
+      "action": "allow",
+      "protocol": "tcp",
+      "source": "10.10.1.0/24",
+      "destination": "10.10.2.10",
+      "ports": [5432]
+    },
+    {
+      "id": "dns-out-udp",
+      "description": "Consultas DNS ao resolvedor do provedor",
+      "action": "allow",
+      "protocol": "udp",
+      "source": "10.10.0.0/16",
+      "destination": "198.51.100.53",
+      "ports": [53]
+    },
+    {
+      "id": "dns-out-tcp",
+      "description": "DNS sobre TCP (respostas grandes) ao resolvedor do provedor",
+      "action": "allow",
+      "protocol": "tcp",
+      "source": "10.10.0.0/16",
+      "destination": "198.51.100.53",
+      "ports": [53]
+    },
+    {
+      "id": "web-out",
+      "description": "Navegação web dos usuários",
+      "action": "allow",
+      "protocol": "tcp",
+      "source": "10.10.0.0/16",
+      "destination": "any",
+      "ports": [80, 443]
+    },
+    {
+      "id": "smtp-relay-out",
+      "description": "Somente o relay de e-mail envia SMTP para fora",
+      "action": "allow",
+      "protocol": "tcp",
+      "source": "10.10.3.25",
+      "destination": "any",
+      "ports": [25]
+    },
+    {
+      "id": "monitoring-icmp",
+      "description": "Ping do servidor de monitoramento para a rede interna",
+      "action": "allow",
+      "protocol": "icmp",
+      "source": "10.20.0.10",
+      "destination": "10.10.0.0/16"
+    },
+    {
+      "id": "deny-all",
+      "description": "Nega explicitamente todo o tráfego não listado",
+      "action": "deny",
+      "protocol": "any",
+      "source": "any",
+      "destination": "any"
+    }
+  ]
+}

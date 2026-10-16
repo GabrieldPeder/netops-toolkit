@@ -1,0 +1,35 @@
+# Ambientes virtuais
+.venv/
+venv/
+env/
+
+# Bytecode e caches
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# Build e empacotamento
+build/
+dist/
+*.egg-info/
+
+# Relatórios gerados localmente (os exemplos versionados ficam em examples/)
+/report.json
+/report.html
+/reports/
+
+# Editores e sistema operacional
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
+
+# Segredos locais (nunca versionar)
+.env
+*.pem
+*.key

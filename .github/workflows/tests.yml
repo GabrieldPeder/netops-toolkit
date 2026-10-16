@@ -1,0 +1,57 @@
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# O workflow só lê o repositório; nenhum segredo é usado.
+permissions:
+  contents: read
+
+# Um novo push na mesma branch cancela a execução anterior.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: ${{ matrix.os }} / Python ${{ matrix.python-version }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        python-version: ["3.12", "3.13", "3.14"]
+
+    steps:
+      - name: Obter o código
+        uses: actions/checkout@v5
+
+      - name: Configurar Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v6
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Instalar o projeto e as dependências de desenvolvimento
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev]"
+
+      - name: Lint (Ruff)
+        run: python -m ruff check .
+
+      - name: Formatação (Ruff)
+        run: python -m ruff format --check .
+
+      - name: Testes (pytest)
+        run: python -m pytest
+
+      - name: Teste de fumaça da CLI
+        run: |
+          netops --version
+          netops subnet 192.168.10.0/24 --json
+          netops firewall audit examples/firewall-rules.json --fail-on medium

@@ -428,8 +428,7 @@ class TestShadowing:
 
         assert not {"FW008", "FW009", "FW010"} & set(codes(result))
 
-    def test_union_of_rules_is_not_detected(self):
-        # Limitação documentada: a cobertura por várias regras não é detectada.
+    def test_union_of_rules_is_not_reported_as_single_cover(self):
         result = audit(
             rule(id="a", ports=["80-85"]),
             rule(id="b", ports=["86-90"]),
@@ -438,6 +437,7 @@ class TestShadowing:
         )
 
         assert not {"FW008", "FW009", "FW010"} & set(codes(result))
+        assert "FW015" in codes(result)
 
     def test_any_protocol_covers_tcp(self):
         result = audit(
@@ -451,6 +451,15 @@ class TestShadowing:
 
         assert not {"FW008", "FW009", "FW010"} & set(codes(result))
 
+    def test_any_source_covered_by_ipv4_default_route_when_destination_is_ipv4(self):
+        result = audit(
+            rule(id="v4-any", source="0.0.0.0/0"),
+            rule(id="any", source="any"),
+            DENY_ALL,
+        )
+
+        assert findings_with(result, "FW010")[0].rule_ids == ("any", "v4-any")
+
     def test_disabled_rules_do_not_shadow(self):
         result = audit(rule(id="a", enabled=False), rule(id="b"), DENY_ALL)
 
@@ -460,6 +469,161 @@ class TestShadowing:
         result = audit(rule(id="a"), DENY_ALL)
 
         assert codes(result) == []
+
+
+class TestUnionCoverage:
+    def test_port_ranges_union(self):
+        result = audit(
+            rule(id="a", ports=["80-85"]),
+            rule(id="b", ports=["86-90"]),
+            rule(id="c", ports=["80-90"]),
+            DENY_ALL,
+        )
+
+        finding = findings_with(result, "FW015")[0]
+        assert finding.rule_ids == ("c", "a", "b")
+        assert finding.severity is Severity.LOW
+        assert finding.category is Category.ERROR
+        assert [item["position"] for item in finding.evidence["covered_by"]] == [1, 2]
+
+    def test_one_port_gap_is_not_covered(self):
+        result = audit(
+            rule(id="a", ports=["80-84"]),
+            rule(id="b", ports=["86-90"]),
+            rule(id="c", ports=["80-90"]),
+            DENY_ALL,
+        )
+
+        assert "FW015" not in codes(result)
+
+    def test_source_networks_union(self):
+        result = audit(
+            rule(id="low", source="10.20.0.0/25"),
+            rule(id="high", source="10.20.0.128/25"),
+            rule(id="all", source="10.20.0.0/24"),
+            DENY_ALL,
+        )
+
+        assert findings_with(result, "FW015")[0].rule_ids == ("all", "low", "high")
+
+    def test_destination_networks_union(self):
+        result = audit(
+            rule(id="a", destination=["10.10.0.10", "10.10.0.11"]),
+            rule(id="b", destination="10.10.0.12"),
+            rule(id="c", destination=["10.10.0.11", "10.10.0.12"]),
+            DENY_ALL,
+        )
+
+        # 'c' é coberta só por 'a' e 'b' juntas.
+        assert findings_with(result, "FW015")[0].rule_ids == ("c", "a", "b")
+
+    def test_mixed_effects_is_medium(self):
+        result = audit(
+            rule(id="a", action="deny", ports=["80-85"]),
+            rule(id="b", ports=["86-90"]),
+            rule(id="c", ports=["80-90"]),
+            DENY_ALL,
+        )
+
+        finding = findings_with(result, "FW015")[0]
+        assert finding.severity is Severity.MEDIUM
+        assert "efeito oposto" in finding.description
+
+    def test_single_cover_takes_precedence(self):
+        result = audit(
+            rule(id="a", action="deny", ports=[80]),
+            rule(id="b", ports=["80-90"]),
+            rule(id="c", ports=["80-90"]),
+            DENY_ALL,
+        )
+
+        # 'b' cobre 'c' sozinha (e é idêntica): o achado é FW008, não FW015.
+        assert findings_with(result, "FW008")[0].rule_ids == ("c", "b")
+        assert "FW015" not in codes(result)
+
+    def test_first_match_decides_each_cell(self):
+        # 'a' decide a porta 80 (deny) antes de 'b'; o resto vem de 'b'.
+        result = audit(
+            rule(id="a", action="deny", ports=[80]),
+            rule(id="b", ports=["81-90"]),
+            rule(id="c", ports=["80-90"]),
+            DENY_ALL,
+        )
+
+        finding = findings_with(result, "FW015")[0]
+        assert finding.rule_ids == ("c", "a", "b")
+        assert finding.severity is Severity.MEDIUM
+
+    def test_any_protocol_needs_other_protocols_covered(self):
+        result = audit(
+            rule(id="t", protocol="tcp", ports=None),
+            rule(id="u", protocol="udp", ports=None),
+            rule(id="i", protocol="icmp", ports=None),
+            rule(id="all", protocol="any", ports=None),
+            DENY_ALL,
+        )
+
+        # GRE, ESP etc. só seriam cobertos por uma regra "any".
+        assert "FW015" not in codes(result)
+
+    def test_any_source_with_ipv4_destination_only_needs_ipv4(self):
+        # Com destino IPv4, o tráfego real de 'any' é só IPv4; as metades bastam.
+        result = audit(
+            rule(id="v4-low", source="0.0.0.0/1"),
+            rule(id="v4-high", source="128.0.0.0/1"),
+            rule(id="later", source="any"),
+            DENY_ALL,
+        )
+
+        assert findings_with(result, "FW015")[0].rule_ids == ("later", "v4-low", "v4-high")
+
+    def test_dual_stack_rule_needs_ipv6_covered(self):
+        destinations = ["10.10.0.10", "2001:db8::10"]
+        halves = [
+            rule(id="v4-low", source="0.0.0.0/1"),
+            rule(id="v4-high", source="128.0.0.0/1"),
+        ]
+        later = rule(id="later", source="any", destination=destinations)
+
+        assert "FW015" not in codes(audit(*halves, later, DENY_ALL))
+
+        v6 = rule(id="v6", source="::/0", destination="2001:db8::10")
+        result = audit(*halves, v6, later, DENY_ALL)
+        assert findings_with(result, "FW015")[0].rule_ids == ("later", "v4-low", "v4-high", "v6")
+
+    def test_ipv6_union(self):
+        result = audit(
+            rule(id="a", source="2001:db8::/33", destination="2001:db8:ff::10"),
+            rule(id="b", source="2001:db8:8000::/33", destination="2001:db8:ff::10"),
+            rule(id="c", source="2001:db8::/32", destination="2001:db8:ff::10"),
+            DENY_ALL,
+        )
+
+        assert findings_with(result, "FW015")[0].rule_ids == ("c", "a", "b")
+
+    def test_disabled_rules_do_not_count(self):
+        result = audit(
+            rule(id="a", ports=["80-85"], enabled=False),
+            rule(id="b", ports=["86-90"]),
+            rule(id="c", ports=["80-90"]),
+            DENY_ALL,
+        )
+
+        assert "FW015" not in codes(result)
+
+    def test_cell_limit_skips_rule_and_reports_it(self, monkeypatch):
+        from netops_toolkit.firewall import coverage
+
+        monkeypatch.setattr(coverage, "MAX_CELLS", 1)
+        result = audit(
+            rule(id="a", ports=["80-85"]),
+            rule(id="b", ports=["86-90"]),
+            rule(id="c", ports=["80-90"]),
+            DENY_ALL,
+        )
+
+        assert "FW015" not in codes(result)
+        assert "c" in result.details["union_check_skipped"]
 
 
 class TestDefaultDeny:
@@ -518,11 +682,11 @@ class TestExamples:
     def test_issues_example_triggers_every_code(self):
         result = audit_file(EXAMPLES / "firewall-rules-issues.yaml")
 
-        expected = {f"FW{number:03d}" for number in range(1, 15)}
+        expected = {f"FW{number:03d}" for number in range(1, 16)}
         assert set(codes(result)) == expected
         assert result.stats == {
-            "rules_total": 19,
-            "rules_valid": 13,
+            "rules_total": 22,
+            "rules_valid": 16,
             "rules_invalid": 6,
             "rules_disabled": 1,
         }

@@ -134,3 +134,39 @@ Formato curto: contexto, decisão e alternativas consideradas.
 - **Decisão:** `input_file` contém `firewall-rules.json`, não o caminho completo.
 - **Motivo:** caminhos absolutos no Windows expõem o nome de usuário. O relatório não deve
   conter informação sensível desnecessária.
+
+## D19 — Configuração do firewall substitui listas
+
+- **Decisão:** `--config` aceita `sensitive_services`, `cleartext_services` e `thresholds`.
+  Listas informadas substituem a padrão (lista vazia desativa a detecção) e campos
+  desconhecidos são recusados.
+- **Motivo:** é explícito e previsível. Um modelo de "adicionar/remover" seria mais
+  compacto, mas exigiria entender as duas listas para saber o resultado. O exemplo traz a
+  lista completa, pronta para editar.
+
+## D20 — Leitor de arquivos compartilhado (`files.py`)
+
+- **Decisão:** a leitura segura de JSON/YAML saiu de `firewall/loader.py` e foi para
+  `files.py`, com a exceção genérica `InputFileError`.
+- **Motivo:** regras, configuração do firewall e configuração dos logs (Fase 4) precisam
+  das mesmas proteções (tamanho, UTF-8, YAML seguro sem sexagesimais).
+
+## D21 — FW015: cobertura pela combinação de regras
+
+- **Decisão:** um novo código, avaliado só quando nenhuma regra cobre a posterior sozinha.
+  O espaço é dividido em células nos limites das regras anteriores, com um limite de
+  100.000 células por regra. As regras puladas ficam listadas em
+  `details.union_check_skipped`.
+- **Motivo:** fecha o falso negativo documentado na Fase 3 sem gerar falsos positivos (a
+  cobertura é exata, não heurística). Manter FW008 a FW010 inalterados preserva o
+  significado dos achados existentes.
+- **Alternativa:** tentar simplificar a geometria (subtração de hiper-retângulos). É mais
+  eficiente em casos extremos, porém bem mais difícil de implementar e de verificar.
+
+## D22 — Somente tráfego real na análise de cobertura
+
+- **Decisão:** combinações de origem IPv4 com destino IPv6 (ou o contrário) são ignoradas
+  em FW008 a FW010 e em FW015.
+- **Motivo:** um teste do FW015 revelou que uma regra com origem `any` e destino IPv4 nunca
+  era considerada coberta por regras IPv4, porque a parte IPv6 de `any` ficava "descoberta".
+  Esse tráfego não existe, então isso era um falso negativo.

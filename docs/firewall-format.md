@@ -95,6 +95,7 @@ Cada achado traz `code`, `title`, `rule_ids`, `description` (o motivo), `recomme
 | FW012 | Regra desabilitada | recommendation | info |
 | FW013 | Regra sem descrição | recommendation | info |
 | FW014 | Campo desconhecido (provável erro de digitação) | warning | low |
+| FW015 | Inalcançável pela **combinação** de regras anteriores (nenhuma cobre sozinha) | error | medium (alguma parte com efeito oposto) / low |
 
 ### Regras de supressão (para evitar ruído)
 
@@ -105,7 +106,7 @@ Cada achado traz `code`, `title`, `rule_ids`, `description` (o motivo), `recomme
 - Regras inválidas não passam pelas detecções FW002 a FW013.
 - Regras desabilitadas recebem apenas FW012 e FW013 e não sombreiam outras regras.
 
-### Cobertura (FW008 a FW010)
+### Cobertura por uma regra (FW008 a FW010)
 
 A regra A (anterior) cobre a regra B (posterior) quando todas as condições abaixo valem:
 
@@ -114,7 +115,34 @@ A regra A (anterior) cobre a regra B (posterior) quando todas as condições aba
 3. o mesmo vale para o destino;
 4. A não restringe portas (icmp/any) ou cada faixa de portas de B cabe em uma faixa de A.
 
+Só conta o tráfego real: origem e destino precisam ser da mesma versão IP. Uma regra com
+origem `any` e destino IPv4, por exemplo, é coberta por uma regra com origem `0.0.0.0/0`.
+
 O achado aponta a **primeira** regra que cobre B.
+
+### Cobertura pela combinação de regras (FW015)
+
+Só é avaliada quando nenhuma regra anterior cobre B sozinha.
+
+1. O espaço de B (protocolo × origem × destino × porta) é dividido em **células** nos
+   limites das regras anteriores que o interceptam. Endereços viram intervalos de inteiros,
+   com IPv4 e IPv6 separados. O protocolo `any` é tratado como tcp, udp, icmp e "outros"
+   (GRE, ESP etc.); "outros" só é coberto por uma regra anterior com protocolo `any`.
+2. Dentro de uma célula, cada regra anterior cobre a célula inteira ou não a toca. Basta
+   testar um ponto.
+3. Para cada célula, procura-se a **primeira** regra anterior que a cobre (a primeira que
+   casa vence). Células com origem e destino de versões IP diferentes são ignoradas, porque
+   não representam tráfego real.
+4. Se todas as células são cobertas, B é inalcançável. O achado lista as regras que decidem
+   alguma célula, na ordem em que aparecem. A severidade é **medium** se alguma delas tem
+   efeito oposto ao de B, e **low** se todas têm o mesmo efeito.
+
+Exemplo: `80-85` e `86-90` antes de `80-90` geram FW015 para a terceira regra. Com uma
+lacuna de uma porta (`80-84` e `86-90`), nada é apontado.
+
+**Limite:** se uma regra exigir mais de 100.000 células, a análise combinada dela é pulada
+e o ID aparece em `details.union_check_skipped` no resultado. Em um teste com 1.000 regras
+sintéticas sobrepostas, a auditoria completa levou cerca de 2 segundos, sem regras puladas.
 
 ### Configuração (`--config`)
 
@@ -147,17 +175,16 @@ thresholds:
 - **Heurísticas dependem de contexto.** Um bastion host com SSH aberto (FW003), um
   servidor FTP legado isolado (FW007) ou uma faixa de portas exigida por uma aplicação
   (FW005) podem ser legítimos. Os achados são pontos de verificação, não falhas confirmadas.
-- **Cobertura pela união de regras não é detectada.** Se `80-85` e `86-90` vêm antes de
-  `80-90`, a terceira regra também nunca é aplicada, mas nenhum achado é gerado. É um falso
-  negativo por escolha: o critério conservador evita falsos positivos.
+- **Regras puladas pelo limite de células** (FW015) não recebem análise combinada. A lista
+  aparece em `details.union_check_skipped`, então a lacuna nunca fica oculta.
 - **Sobreposição parcial com ações opostas não é apontada.** O padrão "negar algo
   específico e liberar algo amplo depois" é legítimo e muito comum.
 - **Chaves duplicadas** no mesmo objeto JSON/YAML são resolvidas pelo parser (vale a
   última) sem aviso.
 - FW011 considera só a última regra **válida e ativa**. Se a regra de negação final for
   inválida, FW011 também é emitido.
-- A análise de cobertura compara cada regra com todas as anteriores (O(n²)). É adequada
-  para centenas ou poucos milhares de regras.
+- A análise de cobertura compara cada regra com todas as anteriores (O(n²), mais o custo das
+  células no FW015). É adequada para centenas ou poucos milhares de regras.
 
 ## 5. Formato do resultado JSON
 
@@ -168,10 +195,10 @@ thresholds:
   "generated_at": "2026-10-16T14:00:00+00:00",
   "input_file": "firewall-rules-issues.yaml",
   "summary": {
-    "rules_total": 19, "rules_valid": 13, "rules_invalid": 6, "rules_disabled": 1,
-    "findings_total": 19,
-    "by_severity": {"critical": 1, "high": 7, "medium": 5, "low": 4, "info": 2},
-    "by_category": {"error": 9, "warning": 6, "recommendation": 4}
+    "rules_total": 22, "rules_valid": 16, "rules_invalid": 6, "rules_disabled": 1,
+    "findings_total": 20,
+    "by_severity": {"critical": 1, "high": 7, "medium": 5, "low": 5, "info": 2},
+    "by_category": {"error": 10, "warning": 6, "recommendation": 4}
   },
   "findings": [
     {
@@ -182,10 +209,16 @@ thresholds:
       "rule_ids": ["allow-all-test"],
       "description": "...",
       "recommendation": "...",
-      "evidence": {"position": 19, "action": "allow", "protocol": "any",
+      "evidence": {"position": 22, "action": "allow", "protocol": "any",
                    "source": ["any"], "destination": ["any"], "ports": null}
     }
-  ]
+  ],
+  "details": {
+    "config": {"sensitive_services": ["..."], "cleartext_services": ["..."],
+               "thresholds": {"broad_port_count": 1000, "broad_prefix_ipv4": 8,
+                              "broad_prefix_ipv6": 16}},
+    "union_check_skipped": []
+  }
 }
 ```
 

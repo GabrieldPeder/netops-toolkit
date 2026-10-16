@@ -148,6 +148,30 @@ rules:
     destination: "2001:db8:20::/64"
     ports: [443]
 
+  - id: mgmt-portal-low
+    description: "Portal de gestão - primeira metade da rede de gestão"
+    action: allow
+    protocol: tcp
+    source: 10.20.0.0/25
+    destination: 10.10.20.20
+    ports: [443]
+
+  - id: mgmt-portal-high
+    description: "Portal de gestão - segunda metade da rede de gestão"
+    action: allow
+    protocol: tcp
+    source: 10.20.0.128/25
+    destination: 10.10.20.20
+    ports: [443]
+
+  - id: mgmt-portal-all            # FW015: coberta pelas duas regras anteriores juntas
+    description: "Portal de gestão - rede de gestão inteira"
+    action: allow
+    protocol: tcp
+    source: 10.20.0.0/24
+    destination: 10.10.20.20
+    ports: [443]
+
   - id: allow-all-test             # FW002 (crítica): qualquer coisa de qualquer lugar
     description: "Teste temporário que ficou esquecido"
     action: allow

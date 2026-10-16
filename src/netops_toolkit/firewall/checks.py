@@ -1,4 +1,4 @@
-"""Detecções da auditoria de firewall (FW002 a FW013).
+"""Detecções da auditoria de firewall (FW002 a FW013 e FW015).
 
 Premissa: as regras são avaliadas de cima para baixo e a primeira que casa
 vence. Os critérios estão descritos em ``docs/firewall-format.md``.
@@ -13,6 +13,7 @@ from pathlib import Path
 
 from netops_toolkit.files import load_structured_file
 from netops_toolkit.firewall.config import FirewallConfig, Service
+from netops_toolkit.firewall.coverage import CellLimitExceeded, UnionCoverage, union_coverage
 from netops_toolkit.firewall.schema import IPNetwork, Rule, RuleSet, parse_ruleset
 from netops_toolkit.models import AuditResult, Category, Finding, Severity
 
@@ -38,7 +39,8 @@ def audit_ruleset(
     findings = list(ruleset.findings)
     for rule in active:
         findings += check_exposure(rule, config)
-    findings += check_shadowing(active)
+    shadow_findings, union_skipped = check_shadowing(active)
+    findings += shadow_findings
     findings += check_default_deny(ruleset, active)
     for rule in ruleset.rules:
         findings += check_hygiene(rule)
@@ -55,7 +57,7 @@ def audit_ruleset(
         input_file=input_file,
         findings=tuple(findings),
         stats=stats,
-        details={"config": config.to_dict()},
+        details={"config": config.to_dict(), "union_check_skipped": union_skipped},
     )
 
 
@@ -95,29 +97,44 @@ def check_exposure(rule: Rule, config: FirewallConfig = DEFAULT_CONFIG) -> list[
     return findings
 
 
-def check_shadowing(active: list[Rule]) -> list[Finding]:
-    """FW008-FW010: regras que nunca serão aplicadas por causa de uma anterior.
+def check_shadowing(active: list[Rule]) -> tuple[list[Finding], list[str]]:
+    """FW008-FW010 e FW015: regras que nunca serão aplicadas.
 
-    O critério é conservador: só aponta quando uma única regra anterior cobre
-    totalmente a posterior. Coberturas pela união de várias regras não são
-    detectadas (falso negativo possível, falso positivo não).
+    Primeiro procura uma única regra anterior que cubra a posterior
+    (FW008-FW010). Se não houver, verifica se a combinação das anteriores a
+    cobre (FW015). Retorna os achados e os IDs das regras cuja análise de
+    combinação foi pulada por exceder o limite de células.
     """
     findings = []
+    skipped = []
     for index, later in enumerate(active):
-        for earlier in active[:index]:
-            if covers(earlier, later):
-                findings.append(_shadow_finding(earlier, later))
-                break
-    return findings
+        previous = active[:index]
+        single = next((earlier for earlier in previous if covers(earlier, later)), None)
+        if single is not None:
+            findings.append(_shadow_finding(single, later))
+            continue
+        try:
+            union = union_coverage(later, previous)
+        except CellLimitExceeded:
+            skipped.append(later.id)
+            continue
+        if union is not None:
+            findings.append(_union_finding(later, union))
+    return findings, skipped
 
 
 def covers(earlier: Rule, later: Rule) -> bool:
     """Indica se todo tráfego casado por ``later`` também casa com ``earlier``."""
     if earlier.protocol not in ("any", later.protocol):
         return False
-    if not _networks_covered(later.sources, earlier.sources):
+    # Só conta o tráfego real: origem e destino da mesma versão IP. Uma regra com
+    # origem "any" e destino IPv4 nunca casa tráfego IPv6.
+    versions = {n.version for n in later.sources} & {n.version for n in later.destinations}
+    sources = tuple(n for n in later.sources if n.version in versions)
+    destinations = tuple(n for n in later.destinations if n.version in versions)
+    if not _networks_covered(sources, earlier.sources):
         return False
-    if not _networks_covered(later.destinations, earlier.destinations):
+    if not _networks_covered(destinations, earlier.destinations):
         return False
     if earlier.ports is None:
         return True
@@ -369,6 +386,43 @@ def _shadow_finding(earlier: Rule, later: Rule) -> Finding:
         ),
         rule_ids=rule_ids,
         evidence=evidence,
+    )
+
+
+def _union_finding(later: Rule, union: UnionCoverage) -> Finding:
+    names = ", ".join(f"'{rule.id}'" for rule in union.covering)
+    if union.opposite_effect:
+        consequence = (
+            f"Parte desse tráfego recebe o efeito oposto ao da regra '{later.id}' "
+            f"({later.action}), então o comportamento pretendido por ela não acontece."
+        )
+        recommendation = (
+            f"Se o comportamento da regra '{later.id}' é o pretendido, mova-a para antes "
+            f"de {names}. Caso contrário, remova-a."
+        )
+    else:
+        consequence = "Todas aplicam o mesmo efeito, então a regra é redundante."
+        recommendation = (
+            f"Remova a regra '{later.id}' ou consolide as regras {names} em uma só, "
+            "se essa for a intenção."
+        )
+    return Finding(
+        code="FW015",
+        category=Category.ERROR,
+        severity=Severity.MEDIUM if union.opposite_effect else Severity.LOW,
+        title="Regra inalcançável pela combinação de regras anteriores",
+        description=(
+            f"Nenhuma regra anterior cobre sozinha a regra '{later.id}', mas juntas as "
+            f"regras {names} cobrem todo o tráfego dela, e ela nunca será aplicada. "
+            f"{consequence}"
+        ),
+        recommendation=recommendation,
+        rule_ids=(later.id, *(rule.id for rule in union.covering)),
+        evidence={
+            "position": later.position,
+            "rule": later.describe_match(),
+            "covered_by": [rule.describe_match() for rule in union.covering],
+        },
     )
 
 

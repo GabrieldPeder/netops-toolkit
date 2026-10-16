@@ -47,8 +47,10 @@ Analisa regras **fictícias**, escritas em um formato documentado pelo projeto
   duplicados. Também trata armadilhas do YAML, como `22:80` virar o número 1360.
 - Detecta permissões *any → any*, serviços sensíveis expostos (SSH, RDP, bancos de dados
   etc.), faixas amplas de portas, protocolos sem criptografia, origens muito amplas, regras
-  duplicadas, regras sombreadas por outra com ação oposta, regras redundantes e ausência de
-  negação padrão.
+  duplicadas, regras sombreadas por outra com ação oposta, regras redundantes, regras
+  inalcançáveis pela combinação de várias regras anteriores e ausência de negação padrão.
+- Serviços sensíveis, protocolos sem criptografia e limites podem ser ajustados com
+  `--config` (exemplo em `examples/firewall-config.yaml`).
 - Separa **erros objetivos**, **alertas heurísticos** e **recomendações**, cada um com
   severidade (`critical` a `info`), motivo e sugestão de correção.
 - Exporta em JSON (`--json` ou `--output`), sem sobrescrever arquivos sem `--overwrite`.
@@ -225,14 +227,14 @@ Nenhum achado.
 ```
 
 Arquivo com problemas propositais (`examples/firewall-rules-issues.yaml`). Trecho da saída
-real, com 4 dos 19 achados:
+real, com 4 dos 20 achados:
 
 ```text
 > netops firewall audit examples/firewall-rules-issues.yaml
 Auditoria de firewall: firewall-rules-issues.yaml
-Regras: 19 (válidas: 13, inválidas: 6, desabilitadas: 1)
-Achados: 19  |  crítica: 1  alta: 7  média: 5  baixa: 4  info: 2
-Por categoria: erro objetivo: 9  alerta heurístico: 6  recomendação: 4
+Regras: 22 (válidas: 16, inválidas: 6, desabilitadas: 1)
+Achados: 20  |  crítica: 1  alta: 7  média: 5  baixa: 5  info: 2
+Por categoria: erro objetivo: 10  alerta heurístico: 6  recomendação: 4
 
 [CRÍTICA] FW002 Permissão de qualquer origem para qualquer destino  (regra: allow-all-test)
   Tipo: alerta heurístico
@@ -260,7 +262,7 @@ Avalie cada achado no contexto do ambiente.
 
 (As linhas longas foram quebradas aqui para facilitar a leitura.)
 
-O formato das regras, os 14 critérios de detecção (FW001 a FW014), as severidades e as
+O formato das regras, os 15 critérios de detecção (FW001 a FW015), as severidades e as
 limitações estão em [docs/firewall-format.md](docs/firewall-format.md).
 
 ### Códigos de saída
@@ -295,19 +297,23 @@ netops-toolkit/
 │   └── testing.md            # como e o que é testado
 ├── examples/
 │   ├── firewall-rules.json         # configuração de referência (sem achados)
-│   └── firewall-rules-issues.yaml  # problemas propositais (FW001 a FW014)
+│   ├── firewall-config.yaml        # configuração da auditoria (valores padrão)
+│   └── firewall-rules-issues.yaml  # problemas propositais (FW001 a FW015)
 ├── src/netops_toolkit/
 │   ├── __init__.py           # versão do pacote
 │   ├── __main__.py           # python -m netops_toolkit
 │   ├── cli.py                # interface Typer (apenas apresentação)
+│   ├── files.py              # leitura segura de JSON/YAML (compartilhada)
 │   ├── models.py             # Finding, Severity, Category, AuditResult
 │   ├── network.py            # cálculo de sub-redes (lógica pura)
 │   └── firewall/
-│       ├── loader.py         # leitura segura de JSON/YAML
+│       ├── config.py         # configuração da auditoria (--config)
 │       ├── schema.py         # modelo das regras e validação
-│       └── checks.py         # detecções e auditoria
+│       ├── checks.py         # detecções e auditoria
+│       └── coverage.py       # cobertura pela combinação de regras (FW015)
 ├── tests/
 │   ├── test_cli.py
+│   ├── test_files.py
 │   ├── test_firewall.py
 │   └── test_network.py
 ├── .gitattributes
@@ -328,8 +334,7 @@ Novos arquivos (`logs.py`, `reports.py`, CI) serão adicionados nas fases corres
   Python podem classificar alguns blocos especiais de forma ligeiramente diferente.
 - Ainda não há planejamento de múltiplas sub-redes (VLSM).
 - Auditoria de firewall: formato próprio (não lê configurações de fabricantes), análise só
-  de porta de destino, cobertura pela união de várias regras não é detectada, sobreposição
-  parcial com ações opostas não é apontada, e a lista de serviços sensíveis é fixa. Detalhes
+  de porta de destino, e sobreposição parcial com ações opostas não é apontada. Detalhes
   em [docs/firewall-format.md](docs/firewall-format.md#4-limitações-e-falsos-positivosnegativos-conhecidos).
 
 ## Aviso sobre auditorias
@@ -345,8 +350,8 @@ alertas heurísticos e recomendações. Os resultados sempre precisam de interpr
 - [x] Fase 2 — Calculadora de sub-redes IPv4/IPv6 com saída JSON
 - [ ] Fase 2+ — Planejamento de múltiplas sub-redes (VLSM)
 - [x] Fase 3 — Auditoria de regras de firewall (JSON/YAML)
-- [ ] Fase 3+ — Lista de serviços sensíveis e limites configuráveis; detecção de cobertura
-  pela união de regras
+- [x] Fase 3+ — Serviços sensíveis e limites configuráveis (`--config`); detecção de
+  cobertura pela combinação de regras (FW015)
 - [ ] Fase 4 — Análise de logs de segurança (JSON Lines)
 - [ ] Fase 5 — Relatórios JSON/HTML compartilhados
 - [ ] Fase 6 — GitHub Actions, revisão final e instalação limpa

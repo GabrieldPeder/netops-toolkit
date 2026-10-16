@@ -17,7 +17,8 @@ Linux: troque `.\.venv\Scripts\python.exe` por `.venv/bin/python`.
 | Arquivo | Escopo |
 |---|---|
 | `tests/test_network.py` | lógica de cálculo, chamada diretamente, sem CLI |
-| `tests/test_firewall.py` | leitura, validação e detecções do firewall, sem CLI |
+| `tests/test_files.py` | leitor compartilhado de JSON/YAML |
+| `tests/test_firewall.py` | validação, detecções e configuração do firewall, sem CLI |
 | `tests/test_cli.py` | comandos via `typer.testing.CliRunner`: saída, JSON, arquivos e códigos de saída |
 
 Os testes são determinísticos: não acessam rede nem dependem do relógio (o campo
@@ -50,11 +51,22 @@ ID duplicado, ação e protocolo não suportados, booleano YAML em `action`, por
 **Firewall: detecções:** cada código de FW002 a FW013 tem testes positivos e negativos.
 Também são testadas as supressões (FW002 suprime FW003; faixa ampla suprime alertas por
 porta), o limite exato de 1000 portas, a equivalência entre deny e reject, a cobertura com
-protocolo `any`, regras desabilitadas que não sombreiam e a limitação documentada de
-cobertura pela união de regras.
+protocolo `any`, regras desabilitadas que não sombreiam, e origem `any` com destino IPv4
+coberta por `0.0.0.0/0`.
+
+**Firewall: combinação de regras (FW015):** união exata de faixas de portas, de origens e
+de destinos; lacuna de uma porta (não dispara); efeitos mistos (medium); a primeira regra
+que casa decide cada célula; prioridade de FW008 a FW010 quando uma regra cobre sozinha;
+protocolo `any` exige regra `any` para "outros protocolos"; regra dual-stack que exige
+cobertura IPv6; união em IPv6; regras desabilitadas ignoradas; limite de células com
+registro em `details.union_check_skipped`.
+
+**Firewall: configuração:** o exemplo é igual aos padrões; serviço sensível personalizado;
+lista que substitui a padrão; lista vazia que desativa a detecção; limites de portas e de
+prefixo; prefixo 0 que desativa FW006; normalização; 17 casos de configuração inválida.
 
 **Firewall: exemplos e resultado:** `examples/firewall-rules.json` sem nenhum achado
-(proteção contra falsos positivos), `examples/firewall-rules-issues.yaml` acionando os 14
+(proteção contra falsos positivos), `examples/firewall-rules-issues.yaml` acionando os 15
 códigos, ordenação por severidade, estrutura do JSON, ausência do caminho absoluto no JSON,
 limites de `--fail-on`.
 

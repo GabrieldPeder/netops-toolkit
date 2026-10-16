@@ -1,6 +1,7 @@
 """Testes da interface de linha de comando."""
 
 import json
+import re
 from pathlib import Path
 
 import pytest
@@ -13,19 +14,34 @@ runner = CliRunner()
 EXAMPLES = Path(__file__).resolve().parent.parent / "examples"
 GOOD_RULES = str(EXAMPLES / "firewall-rules.json")
 BAD_RULES = str(EXAMPLES / "firewall-rules-issues.yaml")
+ANSI_ESCAPE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
+
+
+def plain(text: str) -> str:
+    """Remove códigos de cor ANSI.
+
+    A ajuda é formatada pelo Rich, que ativa cores quando detecta ambientes como
+    o GitHub Actions; sem isso, '--json' viria quebrado por sequências de estilo.
+    """
+    return ANSI_ESCAPE.sub("", text)
+
+
+def test_plain_removes_ansi_sequences():
+    assert plain("\x1b[1;36m-\x1b[0m\x1b[1;36m-json\x1b[0m") == "--json"
 
 
 def test_help_lists_subnet_command():
     result = runner.invoke(app, ["--help"])
 
     assert result.exit_code == 0
-    assert "subnet" in result.output
+    assert "subnet" in plain(result.output)
+    assert "vlsm" in plain(result.output)
 
 
 def test_no_arguments_shows_help():
     result = runner.invoke(app, [])
 
-    assert "subnet" in result.output
+    assert "subnet" in plain(result.output)
 
 
 def test_version():
@@ -39,7 +55,7 @@ def test_subnet_help():
     result = runner.invoke(app, ["subnet", "--help"])
 
     assert result.exit_code == 0
-    assert "--json" in result.output
+    assert "--json" in plain(result.output)
 
 
 def test_subnet_text_output():
@@ -172,14 +188,14 @@ def test_help_lists_firewall_group():
     result = runner.invoke(app, ["firewall", "--help"])
 
     assert result.exit_code == 0
-    assert "audit" in result.output
+    assert "audit" in plain(result.output)
 
 
 def test_firewall_audit_help():
     result = runner.invoke(app, ["firewall", "audit", "--help"])
 
     assert result.exit_code == 0
-    assert "--fail-on" in result.output
+    assert "--fail-on" in plain(result.output)
 
 
 def test_firewall_audit_clean_file():

@@ -73,12 +73,15 @@ class AuditResult:
 
     ``stats`` guarda contagens específicas do módulo (ex.: regras analisadas);
     as contagens por severidade e categoria são calculadas a partir dos achados.
+    ``details`` guarda informações complementares do módulo (ex.: a
+    configuração usada), para que o resultado seja reproduzível.
     """
 
     module: str
     input_file: str
     findings: tuple[Finding, ...]
     stats: dict[str, int] = field(default_factory=dict)
+    details: dict[str, Any] = field(default_factory=dict)
     generated_at: str = field(
         default_factory=lambda: datetime.now(UTC).isoformat(timespec="seconds")
     )
@@ -112,6 +115,7 @@ class AuditResult:
                 "by_category": self.count_by_category(),
             },
             "findings": [finding.to_dict() for finding in self.findings],
+            "details": self.details,
         }
 
     def to_json(self) -> str:

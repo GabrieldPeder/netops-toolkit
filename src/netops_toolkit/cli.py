@@ -17,7 +17,8 @@ from typing import Annotated, NoReturn
 import typer
 
 from netops_toolkit import __version__
-from netops_toolkit.firewall import RulesFileError, audit_file
+from netops_toolkit.files import InputFileError
+from netops_toolkit.firewall import FirewallConfig, audit_file, load_firewall_config
 from netops_toolkit.models import AuditResult, Category, Severity
 from netops_toolkit.network import SubnetError, SubnetInfo, calculate_subnet
 
@@ -121,6 +122,15 @@ def firewall_audit(
             help="Arquivo de regras (.json, .yaml ou .yml).", metavar="ARQUIVO", show_default=False
         ),
     ],
+    config: Annotated[
+        Path | None,
+        typer.Option(
+            "--config",
+            "-c",
+            help="Arquivo de configuração (serviços sensíveis e limites). Veja a documentação.",
+            metavar="ARQUIVO",
+        ),
+    ] = None,
     json_output: Annotated[
         bool, typer.Option("--json", help="Exibe o resultado completo em JSON.")
     ] = False,
@@ -144,8 +154,12 @@ def firewall_audit(
 ) -> None:
     """Audita regras de firewall e aponta erros, alertas e recomendações."""
     try:
-        result = audit_file(file)
-    except RulesFileError as exc:
+        firewall_config = load_firewall_config(config) if config else FirewallConfig()
+    except InputFileError as exc:
+        _fail(f"{exc} (arquivo de configuração: {config})")
+    try:
+        result = audit_file(file, firewall_config)
+    except InputFileError as exc:
         _fail(str(exc))
 
     if output is not None:

@@ -1,0 +1,36 @@
+# Configuração da auditoria de firewall (netops firewall audit --config).
+#
+# Os valores abaixo são exatamente os padrões usados quando --config não é
+# informado. Edite uma cópia conforme o seu ambiente.
+#
+# - Uma lista informada SUBSTITUI a lista padrão; lista vazia ([]) desativa a
+#   detecção correspondente (FW003 ou FW007).
+# - Campos desconhecidos são recusados, para que um erro de digitação não mude
+#   a análise em silêncio.
+version: 1
+
+# FW003: serviços sensíveis liberados de qualquer origem.
+sensitive_services:
+  - {protocol: tcp, port: 22, name: SSH}
+  - {protocol: tcp, port: 23, name: Telnet}
+  - {protocol: tcp, port: 445, name: SMB}
+  - {protocol: tcp, port: 1433, name: Microsoft SQL Server}
+  - {protocol: tcp, port: 3306, name: MySQL}
+  - {protocol: tcp, port: 3389, name: RDP}
+  - {protocol: tcp, port: 5432, name: PostgreSQL}
+  - {protocol: tcp, port: 5900, name: VNC}
+  - {protocol: tcp, port: 6379, name: Redis}
+  - {protocol: tcp, port: 9200, name: Elasticsearch}
+  - {protocol: tcp, port: 27017, name: MongoDB}
+  - {protocol: udp, port: 161, name: SNMP}
+
+# FW007: protocolos que transmitem dados sem criptografia.
+cleartext_services:
+  - {protocol: tcp, port: 21, name: FTP}
+  - {protocol: tcp, port: 23, name: Telnet}
+  - {protocol: udp, port: 69, name: TFTP}
+
+thresholds:
+  broad_port_count: 1000   # FW005: mais portas que isto em uma regra (1 a 65535)
+  broad_prefix_ipv4: 8     # FW006: origem IPv4 mais curta que /8 (0 desativa)
+  broad_prefix_ipv6: 16    # FW006: origem IPv6 mais curta que /16 (0 desativa)

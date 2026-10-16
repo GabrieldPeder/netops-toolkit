@@ -12,7 +12,7 @@ import re
 from dataclasses import dataclass
 from typing import Any
 
-from netops_toolkit.firewall.loader import RulesFileError
+from netops_toolkit.files import InputFileError
 from netops_toolkit.models import Category, Finding, Severity
 
 IPNetwork = ipaddress.IPv4Network | ipaddress.IPv6Network
@@ -131,18 +131,18 @@ def parse_ruleset(data: Any) -> RuleSet:
     """Valida o conteúdo já decodificado de um arquivo de regras.
 
     Raises:
-        RulesFileError: se a estrutura raiz impedir qualquer análise.
+        InputFileError: se a estrutura raiz impedir qualquer análise.
     """
     if not isinstance(data, dict):
-        raise RulesFileError("a raiz do arquivo deve ser um objeto com o campo 'rules'")
+        raise InputFileError("a raiz do arquivo deve ser um objeto com o campo 'rules'")
     if "rules" not in data:
-        raise RulesFileError("campo obrigatório ausente na raiz: 'rules'")
+        raise InputFileError("campo obrigatório ausente na raiz: 'rules'")
     if not isinstance(data["rules"], list):
-        raise RulesFileError("o campo 'rules' deve ser uma lista de regras")
+        raise InputFileError("o campo 'rules' deve ser uma lista de regras")
 
     version = data.get("version", 1)
     if isinstance(version, bool) or version not in SUPPORTED_VERSIONS:
-        raise RulesFileError(
+        raise InputFileError(
             f"versão de formato não suportada: {version!r}. Versões aceitas: "
             + ", ".join(str(v) for v in SUPPORTED_VERSIONS)
         )

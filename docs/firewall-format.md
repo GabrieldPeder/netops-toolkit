@@ -3,7 +3,7 @@
 Implementação: `src/netops_toolkit/firewall/`. Comando:
 
 ```text
-netops firewall audit ARQUIVO [--json] [--output ARQUIVO] [--overwrite] [--fail-on SEVERIDADE]
+netops firewall audit ARQUIVO [--config CFG] [--json] [--output ARQUIVO] [--overwrite] [--fail-on SEVERIDADE]
 ```
 
 As regras são **fictícias** e seguem um formato próprio do projeto. Nenhum firewall real é
@@ -116,6 +116,32 @@ A regra A (anterior) cobre a regra B (posterior) quando todas as condições aba
 
 O achado aponta a **primeira** regra que cobre B.
 
+### Configuração (`--config`)
+
+A lista de serviços sensíveis (FW003), a de protocolos sem criptografia (FW007) e os
+limites de FW005/FW006 podem ser ajustados por um arquivo JSON ou YAML.
+`examples/firewall-config.yaml` contém exatamente os valores padrão, comentados.
+
+```yaml
+version: 1
+sensitive_services:              # substitui a lista padrão; [] desativa o FW003
+  - {protocol: tcp, port: 22, name: SSH}
+  - {protocol: tcp, port: 8080, name: "Painel Tomcat"}
+cleartext_services:              # substitui a lista padrão; [] desativa o FW007
+  - {protocol: tcp, port: 21, name: FTP}
+thresholds:
+  broad_port_count: 1000         # FW005, de 1 a 65535
+  broad_prefix_ipv4: 8           # FW006, de 0 a 32 (0 desativa)
+  broad_prefix_ipv6: 16          # FW006, de 0 a 128 (0 desativa)
+```
+
+- Seções omitidas mantêm o padrão.
+- A validação é rígida: protocolo `tcp`/`udp`, porta inteira de 1 a 65535, nome não
+  vazio. **Campos desconhecidos são recusados**, porque um erro de digitação mudaria a
+  análise sem aviso.
+- Uma configuração inválida é erro fatal (código 1).
+- A configuração efetivamente usada é gravada em `details.config` no resultado JSON.
+
 ## 4. Limitações e falsos positivos/negativos conhecidos
 
 - **Heurísticas dependem de contexto.** Um bastion host com SSH aberto (FW003), um
@@ -128,7 +154,6 @@ O achado aponta a **primeira** regra que cobre B.
   específico e liberar algo amplo depois" é legítimo e muito comum.
 - **Chaves duplicadas** no mesmo objeto JSON/YAML são resolvidas pelo parser (vale a
   última) sem aviso.
-- A lista de serviços sensíveis e os limites (1000 portas, /8, /16) são fixos no código.
 - FW011 considera só a última regra **válida e ativa**. Se a regra de negação final for
   inválida, FW011 também é emitido.
 - A análise de cobertura compara cada regra com todas as anteriores (O(n²)). É adequada

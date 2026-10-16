@@ -248,6 +248,39 @@ def test_firewall_audit_invalid_fail_on_is_usage_error():
     assert result.exit_code == 2
 
 
+def test_firewall_audit_with_config(tmp_path):
+    config = tmp_path / "cfg.yaml"
+    config.write_text("thresholds:\n  broad_port_count: 100\n", encoding="utf-8")
+
+    result = runner.invoke(
+        app, ["firewall", "audit", GOOD_RULES, "--config", str(config), "--json"]
+    )
+
+    assert result.exit_code == 0
+    data = json.loads(result.output)
+    assert data["details"]["config"]["thresholds"]["broad_port_count"] == 100
+
+
+def test_firewall_audit_invalid_config_exits_1(tmp_path):
+    config = tmp_path / "cfg.yaml"
+    config.write_text("thresholds:\n  broad_ports: 100\n", encoding="utf-8")
+
+    result = runner.invoke(app, ["firewall", "audit", GOOD_RULES, "-c", str(config)])
+
+    assert result.exit_code == 1
+    assert "configuração inválida" in result.output
+    assert "Traceback" not in result.output
+
+
+def test_firewall_audit_missing_config_exits_1(tmp_path):
+    result = runner.invoke(
+        app, ["firewall", "audit", GOOD_RULES, "--config", str(tmp_path / "nope.yaml")]
+    )
+
+    assert result.exit_code == 1
+    assert "arquivo de configuração" in result.output
+
+
 def test_firewall_audit_missing_argument_is_usage_error():
     result = runner.invoke(app, ["firewall", "audit"])
 

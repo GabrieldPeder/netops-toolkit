@@ -11,54 +11,33 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from netops_toolkit.firewall.loader import load_rules_file
+from netops_toolkit.files import load_structured_file
+from netops_toolkit.firewall.config import FirewallConfig, Service
 from netops_toolkit.firewall.schema import IPNetwork, Rule, RuleSet, parse_ruleset
 from netops_toolkit.models import AuditResult, Category, Finding, Severity
 
 MODULE_NAME = "firewall"
-
-# (protocolo, porta, serviço). Serviços de administração remota ou bancos de
-# dados que raramente precisam ser acessíveis de qualquer origem.
-SENSITIVE_SERVICES: tuple[tuple[str, int, str], ...] = (
-    ("tcp", 22, "SSH"),
-    ("tcp", 23, "Telnet"),
-    ("tcp", 445, "SMB"),
-    ("tcp", 1433, "Microsoft SQL Server"),
-    ("tcp", 3306, "MySQL"),
-    ("tcp", 3389, "RDP"),
-    ("tcp", 5432, "PostgreSQL"),
-    ("tcp", 5900, "VNC"),
-    ("tcp", 6379, "Redis"),
-    ("tcp", 9200, "Elasticsearch"),
-    ("tcp", 27017, "MongoDB"),
-    ("udp", 161, "SNMP"),
-)
-CLEARTEXT_SERVICES: tuple[tuple[str, int, str], ...] = (
-    ("tcp", 21, "FTP"),
-    ("tcp", 23, "Telnet"),
-    ("udp", 69, "TFTP"),
-)
-BROAD_PORT_THRESHOLD = 1000
-# Prefixos mais curtos que estes (mas diferentes de /0) são considerados amplos.
-BROAD_PREFIX_BY_VERSION = {4: 8, 6: 16}
+DEFAULT_CONFIG = FirewallConfig()
 
 
-def audit_file(path: Path) -> AuditResult:
+def audit_file(path: Path, config: FirewallConfig = DEFAULT_CONFIG) -> AuditResult:
     """Lê, valida e audita um arquivo de regras.
 
     Raises:
-        RulesFileError: se o arquivo não puder ser lido ou tiver raiz inválida.
+        InputFileError: se o arquivo não puder ser lido ou tiver raiz inválida.
     """
-    ruleset = parse_ruleset(load_rules_file(path))
-    return audit_ruleset(ruleset, input_file=path.name)
+    ruleset = parse_ruleset(load_structured_file(path))
+    return audit_ruleset(ruleset, input_file=path.name, config=config)
 
 
-def audit_ruleset(ruleset: RuleSet, input_file: str = "-") -> AuditResult:
+def audit_ruleset(
+    ruleset: RuleSet, input_file: str = "-", config: FirewallConfig = DEFAULT_CONFIG
+) -> AuditResult:
     active = [rule for rule in ruleset.rules if rule.enabled]
 
     findings = list(ruleset.findings)
     for rule in active:
-        findings += check_exposure(rule)
+        findings += check_exposure(rule, config)
     findings += check_shadowing(active)
     findings += check_default_deny(ruleset, active)
     for rule in ruleset.rules:
@@ -72,11 +51,15 @@ def audit_ruleset(ruleset: RuleSet, input_file: str = "-") -> AuditResult:
         "rules_disabled": len(ruleset.rules) - len(active),
     }
     return AuditResult(
-        module=MODULE_NAME, input_file=input_file, findings=tuple(findings), stats=stats
+        module=MODULE_NAME,
+        input_file=input_file,
+        findings=tuple(findings),
+        stats=stats,
+        details={"config": config.to_dict()},
     )
 
 
-def check_exposure(rule: Rule) -> list[Finding]:
+def check_exposure(rule: Rule, config: FirewallConfig = DEFAULT_CONFIG) -> list[Finding]:
     """FW002-FW007: permissões amplas ou exposição de serviços sensíveis.
 
     Quando a regra já é ampla demais (FW002, FW004, FW005), os alertas por
@@ -90,24 +73,25 @@ def check_exposure(rule: Rule) -> list[Finding]:
     findings: list[Finding] = []
     if rule.protocol == "any":
         findings.append(_any_protocol(rule))
-    elif rule.ports is not None and rule.port_count > BROAD_PORT_THRESHOLD:
-        findings.append(_broad_ports(rule))
+    elif rule.ports is not None and rule.port_count > config.broad_port_count:
+        findings.append(_broad_ports(rule, config.broad_port_count))
     elif rule.ports is not None:
         if rule.source_is_any:
-            exposed = _services_matched(rule, SENSITIVE_SERVICES)
+            exposed = _services_matched(rule, config.sensitive_services)
             if exposed:
                 findings.append(_sensitive_exposed(rule, exposed))
-        cleartext = _services_matched(rule, CLEARTEXT_SERVICES)
+        cleartext = _services_matched(rule, config.cleartext_services)
         if cleartext:
             findings.append(_cleartext(rule, cleartext))
 
+    # Prefixos mais curtos que o limite (mas diferentes de /0) são considerados amplos.
     broad_sources = [
         network
         for network in rule.sources
-        if 0 < network.prefixlen < BROAD_PREFIX_BY_VERSION[network.version]
+        if 0 < network.prefixlen < config.broad_prefix(network.version)
     ]
     if broad_sources:
-        findings.append(_broad_source(rule, broad_sources))
+        findings.append(_broad_source(rule, broad_sources, config))
     return findings
 
 
@@ -255,7 +239,7 @@ def _any_protocol(rule: Rule) -> Finding:
     )
 
 
-def _broad_ports(rule: Rule) -> Finding:
+def _broad_ports(rule: Rule, threshold: int) -> Finding:
     from_anywhere = rule.source_is_any
     return _rule_finding(
         rule,
@@ -265,7 +249,7 @@ def _broad_ports(rule: Rule) -> Finding:
         description=(
             f"A regra '{rule.id}' libera {rule.port_count} portas {rule.protocol}"
             + (" de qualquer origem" if from_anywhere else "")
-            + f" (limite de referência: {BROAD_PORT_THRESHOLD}). Faixas amplas costumam "
+            + f" (limite de referência: {threshold}). Faixas amplas costumam "
             "ser atalhos de configuração e expõem serviços não previstos."
         ),
         recommendation=(
@@ -313,7 +297,7 @@ def _cleartext(rule: Rule, services: list[str]) -> Finding:
     )
 
 
-def _broad_source(rule: Rule, networks: list[IPNetwork]) -> Finding:
+def _broad_source(rule: Rule, networks: list[IPNetwork], config: FirewallConfig) -> Finding:
     shown = ", ".join(str(network) for network in networks)
     return _rule_finding(
         rule,
@@ -322,7 +306,8 @@ def _broad_source(rule: Rule, networks: list[IPNetwork]) -> Finding:
         title="Origem muito ampla",
         description=(
             f"A regra '{rule.id}' aceita origem {shown}, um bloco muito grande "
-            "(IPv4 maior que /8 ou IPv6 maior que /16). Pode ser um erro de prefixo."
+            f"(IPv4 maior que /{config.broad_prefix_ipv4} ou IPv6 maior que "
+            f"/{config.broad_prefix_ipv6}). Pode ser um erro de prefixo."
         ),
         recommendation="Confirme o prefixo e restrinja a origem às redes realmente necessárias.",
     )
@@ -413,13 +398,13 @@ def _rule_finding(
     )
 
 
-def _services_matched(rule: Rule, services: tuple[tuple[str, int, str], ...]) -> list[str]:
+def _services_matched(rule: Rule, services: tuple[Service, ...]) -> list[str]:
     matched = []
-    for protocol, port, name in services:
-        if rule.protocol != protocol or rule.ports is None:
+    for service in services:
+        if rule.protocol != service.protocol or rule.ports is None:
             continue
-        if any(port_range.contains_port(port) for port_range in rule.ports):
-            matched.append(f"{name} ({protocol}/{port})")
+        if any(port_range.contains_port(service.port) for port_range in rule.ports):
+            matched.append(f"{service.name} ({service.protocol}/{service.port})")
     return matched
 
 

@@ -5,8 +5,9 @@ from pathlib import Path
 
 import pytest
 
-from netops_toolkit.firewall import RulesFileError, audit_file, audit_ruleset, parse_ruleset
-from netops_toolkit.firewall.loader import MAX_FILE_BYTES, load_rules_file
+from netops_toolkit.files import InputFileError
+from netops_toolkit.firewall import audit_file, audit_ruleset, parse_ruleset
+from netops_toolkit.firewall.config import FirewallConfig, Service, parse_firewall_config
 from netops_toolkit.models import Category, Severity
 
 EXAMPLES = Path(__file__).resolve().parent.parent / "examples"
@@ -53,7 +54,7 @@ def findings_with(result, code):
 # --- Leitura de arquivos -----------------------------------------------------
 
 
-class TestLoader:
+class TestFileLoading:
     def test_valid_json_example(self):
         result = audit_file(EXAMPLES / "firewall-rules.json")
 
@@ -80,89 +81,31 @@ class TestLoader:
 
         assert result.stats["rules_valid"] == 1
 
-    def test_json_with_utf8_bom_is_accepted(self, tmp_path):
+    def test_malformed_file_raises_input_error(self, tmp_path):
         path = tmp_path / "rules.json"
-        path.write_bytes(b"\xef\xbb\xbf" + json.dumps({"rules": []}).encode())
+        path.write_text("{", encoding="utf-8")
 
-        assert load_rules_file(path) == {"rules": []}
-
-    def test_malformed_json(self, tmp_path):
-        path = tmp_path / "rules.json"
-        path.write_text('{"rules": [', encoding="utf-8")
-
-        with pytest.raises(RulesFileError, match=r"JSON inválido \(linha 1"):
-            load_rules_file(path)
-
-    def test_malformed_yaml(self, tmp_path):
-        path = tmp_path / "rules.yaml"
-        path.write_text("rules:\n  - id: [unclosed\n", encoding="utf-8")
-
-        with pytest.raises(RulesFileError, match="YAML inválido"):
-            load_rules_file(path)
-
-    def test_missing_file(self, tmp_path):
-        with pytest.raises(RulesFileError, match="não encontrado"):
-            load_rules_file(tmp_path / "nope.json")
-
-    def test_directory_instead_of_file(self, tmp_path):
-        folder = tmp_path / "dir.json"
-        folder.mkdir()
-
-        with pytest.raises(RulesFileError, match="não é um arquivo"):
-            load_rules_file(folder)
-
-    def test_unsupported_extension(self, tmp_path):
-        path = tmp_path / "rules.txt"
-        path.write_text("{}", encoding="utf-8")
-
-        with pytest.raises(RulesFileError, match="extensão não suportada"):
-            load_rules_file(path)
-
-    def test_file_too_large(self, tmp_path):
-        path = tmp_path / "big.json"
-        path.write_bytes(b" " * (MAX_FILE_BYTES + 1))
-
-        with pytest.raises(RulesFileError, match="muito grande"):
-            load_rules_file(path)
-
-    def test_non_utf8_file(self, tmp_path):
-        path = tmp_path / "rules.json"
-        path.write_bytes('{"name": "configuração"}'.encode("latin-1"))
-
-        with pytest.raises(RulesFileError, match="UTF-8"):
-            load_rules_file(path)
-
-    def test_yaml_does_not_build_python_objects(self, tmp_path):
-        path = tmp_path / "evil.yaml"
-        path.write_text("rules: !!python/object/apply:os.system ['echo x']\n", encoding="utf-8")
-
-        with pytest.raises(RulesFileError, match="YAML inválido"):
-            load_rules_file(path)
-
-    def test_yaml_sexagesimal_port_stays_text(self, tmp_path):
-        path = tmp_path / "rules.yaml"
-        path.write_text("ports: 22:80\nplain: 8080\n", encoding="utf-8")
-
-        assert load_rules_file(path) == {"ports": "22:80", "plain": 8080}
+        with pytest.raises(InputFileError, match="JSON inválido"):
+            audit_file(path)
 
 
 class TestRootStructure:
     @pytest.mark.parametrize("data", [None, [], "rules", 42])
     def test_root_must_be_object(self, data):
-        with pytest.raises(RulesFileError, match="raiz"):
+        with pytest.raises(InputFileError, match="raiz"):
             parse_ruleset(data)
 
     def test_rules_required(self):
-        with pytest.raises(RulesFileError, match="'rules'"):
+        with pytest.raises(InputFileError, match="'rules'"):
             parse_ruleset({"version": 1})
 
     def test_rules_must_be_list(self):
-        with pytest.raises(RulesFileError, match="lista"):
+        with pytest.raises(InputFileError, match="lista"):
             parse_ruleset({"rules": {"id": "x"}})
 
     @pytest.mark.parametrize("version", [2, "1", True])
     def test_unsupported_version(self, version):
-        with pytest.raises(RulesFileError, match="versão"):
+        with pytest.raises(InputFileError, match="versão"):
             parse_ruleset({"version": version, "rules": []})
 
     def test_empty_rule_list_is_valid(self):
@@ -624,3 +567,110 @@ class TestResult:
         result = audit(rule(source="any", ports=[22]), DENY_ALL)
 
         assert result.has_findings_at_or_above(threshold) is expected
+
+    def test_details_include_config_used(self):
+        data = json.loads(audit(DENY_ALL).to_json())
+
+        thresholds = data["details"]["config"]["thresholds"]
+        assert thresholds == {
+            "broad_port_count": 1000,
+            "broad_prefix_ipv4": 8,
+            "broad_prefix_ipv6": 16,
+        }
+
+
+# --- Configuração (--config) ---------------------------------------------------
+
+
+def audit_with(config, *rules):
+    data = {"version": 1, "rules": [*rules, DENY_ALL]}
+    return audit_ruleset(parse_ruleset(data), config=config)
+
+
+class TestConfig:
+    def test_example_config_equals_defaults(self):
+        from netops_toolkit.firewall import load_firewall_config
+
+        assert load_firewall_config(EXAMPLES / "firewall-config.yaml") == FirewallConfig()
+
+    def test_custom_sensitive_service(self):
+        config = parse_firewall_config(
+            {"sensitive_services": [{"protocol": "tcp", "port": 8080, "name": "Tomcat"}]}
+        )
+
+        result = audit_with(config, rule(source="any", ports=[8080]))
+
+        assert findings_with(result, "FW003")[0].evidence["services"] == ["Tomcat (tcp/8080)"]
+
+    def test_list_replaces_defaults(self):
+        config = parse_firewall_config(
+            {"sensitive_services": [{"protocol": "tcp", "port": 8080, "name": "Tomcat"}]}
+        )
+
+        result = audit_with(config, rule(source="any", ports=[22]))
+
+        assert "FW003" not in codes(result)
+
+    def test_empty_list_disables_detection(self):
+        config = parse_firewall_config({"cleartext_services": []})
+
+        result = audit_with(config, rule(ports=[23]))
+
+        assert "FW007" not in codes(result)
+
+    def test_custom_port_threshold(self):
+        config = parse_firewall_config({"thresholds": {"broad_port_count": 100}})
+
+        assert "FW005" in codes(audit_with(config, rule(ports=["8000-8200"])))
+        assert "FW005" not in codes(audit(rule(ports=["8000-8200"]), DENY_ALL))
+
+    def test_custom_prefix_threshold(self):
+        config = parse_firewall_config({"thresholds": {"broad_prefix_ipv4": 16}})
+
+        result = audit_with(config, rule(source="10.0.0.0/12"))
+
+        finding = findings_with(result, "FW006")[0]
+        assert "/16" in finding.description
+
+    def test_prefix_zero_disables_broad_source(self):
+        config = parse_firewall_config({"thresholds": {"broad_prefix_ipv4": 0}})
+
+        assert "FW006" not in codes(audit_with(config, rule(source="10.0.0.0/7")))
+
+    def test_protocol_is_normalized(self):
+        config = parse_firewall_config(
+            {"sensitive_services": [{"protocol": "TCP", "port": 22, "name": " SSH "}]}
+        )
+
+        assert config.sensitive_services == (Service("tcp", 22, "SSH"),)
+
+    @pytest.mark.parametrize(
+        ("data", "message"),
+        [
+            ([], "raiz"),
+            ({"version": 2}, "versão"),
+            ({"sensitive": []}, "desconhecido"),
+            ({"sensitive_services": {}}, "lista"),
+            ({"sensitive_services": ["ssh"]}, "objeto"),
+            ({"sensitive_services": [{"protocol": "tcp", "port": 22}]}, "name"),
+            ({"sensitive_services": [{"protocol": "icmp", "port": 1, "name": "x"}]}, "protocolo"),
+            ({"sensitive_services": [{"protocol": "tcp", "port": 0, "name": "x"}]}, "porta"),
+            ({"sensitive_services": [{"protocol": "tcp", "port": "22", "name": "x"}]}, "porta"),
+            ({"sensitive_services": [{"protocol": "tcp", "port": True, "name": "x"}]}, "porta"),
+            ({"sensitive_services": [{"protocol": "tcp", "port": 22, "name": ""}]}, "name"),
+            (
+                {"sensitive_services": [{"protocol": "tcp", "port": 22, "name": "x", "a": 1}]},
+                "desconhecido",
+            ),
+            ({"thresholds": []}, "objeto"),
+            ({"thresholds": {"broad_ports": 10}}, "desconhecido"),
+            ({"thresholds": {"broad_port_count": 0}}, "1 a 65535"),
+            ({"thresholds": {"broad_prefix_ipv4": 33}}, "0 a 32"),
+            ({"thresholds": {"broad_prefix_ipv6": True}}, "0 a 128"),
+        ],
+    )
+    def test_invalid_config(self, data, message):
+        with pytest.raises(InputFileError, match=message) as error:
+            parse_firewall_config(data)
+
+        assert str(error.value).startswith("configuração inválida")

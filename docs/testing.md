@@ -17,6 +17,7 @@ Linux: troque `.\.venv\Scripts\python.exe` por `.venv/bin/python`.
 | Arquivo | Escopo |
 |---|---|
 | `tests/test_network.py` | lógica de cálculo, chamada diretamente, sem CLI |
+| `tests/test_vlsm.py` | planejamento VLSM, sem CLI |
 | `tests/test_files.py` | leitor compartilhado de JSON/YAML |
 | `tests/test_firewall.py` | validação, detecções e configuração do firewall, sem CLI |
 | `tests/test_cli.py` | comandos via `typer.testing.CliRunner`: saída, JSON, arquivos e códigos de saída |
@@ -36,6 +37,13 @@ ausência de conceitos IPv4 em IPv6; classificação de tipos de endereço; pref
 (/33, /129, negativo, texto, vazio, máscara decimal); endereços malformados (octeto > 255,
 octetos faltando, zero à esquerda, texto, `:::` em IPv6, vazio); ausência de prefixo;
 JSON válido e com chaves estáveis.
+
+**VLSM:** exemplo clássico com rede, máscara, faixa, broadcast e sobra; independência da
+ordem informada; empate preservando a ordem; menor prefixo para 1 a 255 hosts; `--use-31`
+com 1 e 2 hosts sem afetar necessidades maiores; encaixe exato sem blocos livres; blocos
+livres que somam o restante; alocações sem sobreposição e dentro do bloco; bloco com bits de
+host; erros (não cabe, necessidade maior que o bloco, IPv6, bloco inválido, nome repetido
+sem diferenciar maiúsculas, lista vazia); análise de `nome=hosts`; estrutura do JSON.
 
 **Firewall: leitura:** JSON e YAML válidos, JSON com BOM, JSON/YAML malformados,
 arquivo inexistente, pasta no lugar de arquivo, extensão não suportada, arquivo acima de
@@ -72,7 +80,9 @@ limites de `--fail-on`.
 
 **CLI:** `--help`, `--version`, ajuda dos subcomandos, saída de texto IPv4/IPv6/31,
 separador de milhar, `--json`, entrada inválida (código 1, sem traceback), argumento
-ausente, opção desconhecida e comando desconhecido (código 2). Em `firewall audit`:
+ausente, opção desconhecida e comando desconhecido (código 2). Em `vlsm`: texto (com
+percentual em formato brasileiro), JSON, `--use-31`, falta de espaço e necessidade
+inválida (código 1), ausência de `--need` (código 2). Em `firewall audit`:
 arquivo sem achados, texto com achados, `--json`, `--output`, recusa de sobrescrita,
 `--overwrite`, pasta de destino inexistente, destino que é uma pasta, arquivo inexistente e
 malformado (código 1), `--fail-on` (código 3, sem diferenciar maiúsculas e minúsculas),

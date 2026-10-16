@@ -86,3 +86,72 @@ Todas as chaves estão sempre presentes, em IPv4 e IPv6; campos que não se apli
 | `first_usable` / `last_usable` | string \| null | só IPv4 |
 | `exploded` | string \| null | só IPv6 |
 | `notes` | lista de strings | observações em português |
+
+# Planejamento VLSM
+
+Implementação: `src/netops_toolkit/vlsm.py`. Comando:
+
+```text
+netops vlsm BLOCO --need NOME=HOSTS [--need NOME=HOSTS ...] [--use-31] [--json]
+```
+
+## Algoritmo
+
+1. Cada necessidade recebe o **menor** prefixo cujo número de hosts utilizáveis a atende:
+   `2^(32 - prefixo) - 2 >= hosts`. Na prática, uma necessidade de 2 hosts recebe /30 e
+   uma de 255 hosts recebe /23.
+2. As necessidades são ordenadas da **maior para a menor**. Em caso de empate, vale a ordem
+   informada.
+3. Os blocos são alocados em sequência a partir do início do bloco principal. Como são
+   potências de 2 em ordem decrescente, cada bloco começa alinhado e não sobram lacunas
+   entre eles.
+4. O espaço restante é resumido no menor conjunto de blocos CIDR (`free_blocks`).
+
+Antes de alocar, a soma dos tamanhos é comparada com o bloco. Se não couber, o erro informa
+quantos endereços seriam necessários e o prefixo de cada necessidade.
+
+## Opções e regras
+
+- `--use-31`: necessidades de até 2 hosts recebem /31 (RFC 3021, sem broadcast) em vez de /30.
+- Nomes são obrigatórios, com até 64 caracteres e únicos sem diferenciar maiúsculas e
+  minúsculas. O separador é o **último** `=`, então `filial=sp=30` cria a sub-rede `filial=sp`.
+- O bloco segue as mesmas regras de entrada do `netops subnet`. Com bits de host
+  (`10.0.0.77/24`), o bloco de rede é usado e uma observação é adicionada.
+- **Somente IPv4.** Em IPv6 a prática é um /64 por sub-rede (SLAAC) e não há escassez de
+  hosts, então a lógica de "menor bloco que cabe" não se aplica.
+
+## Exemplo
+
+```text
+> netops vlsm 10.0.0.0/22 --need vendas=200 --need ti=50 --need rh=20 --need wan-sp=2 --need wan-rj=2
+Bloco: 10.0.0.0/22 (1.024 endereços)
+
+Nome    Hosts  Rede           Máscara          Faixa utilizável         Broadcast   Disp.  Sobra
+vendas  200    10.0.0.0/24    255.255.255.0    10.0.0.1 - 10.0.0.254    10.0.0.255  254    54
+ti      50     10.0.1.0/26    255.255.255.192  10.0.1.1 - 10.0.1.62     10.0.1.63   62     12
+rh      20     10.0.1.64/27   255.255.255.224  10.0.1.65 - 10.0.1.94    10.0.1.95   30     10
+wan-sp  2      10.0.1.96/30   255.255.255.252  10.0.1.97 - 10.0.1.98    10.0.1.99   2      0
+wan-rj  2      10.0.1.100/30  255.255.255.252  10.0.1.101 - 10.0.1.102  10.0.1.103  2      0
+
+Utilização: 360 de 1.024 endereços (35,16%)
+Blocos livres: 10.0.1.104/29, 10.0.1.112/28, 10.0.1.128/25, 10.0.2.0/23
+```
+
+## Formato JSON
+
+| Chave | Tipo | Descrição |
+|---|---|---|
+| `block` | string | bloco normalizado |
+| `total_addresses` / `allocated_addresses` / `free_addresses` | int | contagens de endereços |
+| `utilization_percent` | float | percentual alocado, com 2 casas |
+| `use_31` | bool | se `--use-31` foi usado |
+| `allocations` | lista | `name`, `hosts_requested`, `network`, `prefix_length`, `netmask`, `first_usable`, `last_usable`, `broadcast_address` (`null` em /31), `usable_hosts`, `spare_hosts` |
+| `free_blocks` | lista de strings | espaço livre em blocos CIDR |
+| `notes` | lista de strings | observações em português |
+
+## Limitações
+
+- Não reserva espaço para crescimento. Se quiser folga, informe hosts a mais.
+- A ordem "maior primeiro" é ótima para não fragmentar, mas não permite escolher a posição
+  de cada sub-rede.
+- Não há VLSM em IPv6 (ver acima).

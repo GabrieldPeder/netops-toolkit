@@ -116,6 +116,55 @@ def test_unknown_command_is_usage_error():
     assert result.exit_code == 2
 
 
+# --- vlsm ----------------------------------------------------------------------
+
+
+def test_vlsm_text_output():
+    result = runner.invoke(app, ["vlsm", "10.0.0.0/22", "--need", "vendas=200", "-n", "wan=2"])
+
+    assert result.exit_code == 0
+    assert "10.0.0.0/24" in result.output
+    assert "10.0.1.0/30" in result.output
+    assert "Blocos livres:" in result.output
+    assert "25,39%" in result.output
+
+
+def test_vlsm_json_output():
+    result = runner.invoke(app, ["vlsm", "10.0.0.0/24", "-n", "a=10", "--json"])
+
+    assert result.exit_code == 0
+    assert json.loads(result.output)["allocations"][0]["network"] == "10.0.0.0/28"
+
+
+def test_vlsm_use_31():
+    result = runner.invoke(app, ["vlsm", "10.0.0.0/24", "-n", "wan=2", "--use-31"])
+
+    assert result.exit_code == 0
+    assert "10.0.0.0/31" in result.output
+    assert "RFC 3021" in result.output
+
+
+def test_vlsm_not_enough_space_exits_1():
+    result = runner.invoke(app, ["vlsm", "192.168.1.0/24", "-n", "a=200", "-n", "b=100"])
+
+    assert result.exit_code == 1
+    assert "não cabem" in result.output
+    assert "Traceback" not in result.output
+
+
+def test_vlsm_invalid_need_exits_1():
+    result = runner.invoke(app, ["vlsm", "10.0.0.0/24", "-n", "vendas"])
+
+    assert result.exit_code == 1
+    assert "nome=hosts" in result.output
+
+
+def test_vlsm_without_need_is_usage_error():
+    result = runner.invoke(app, ["vlsm", "10.0.0.0/24"])
+
+    assert result.exit_code == 2
+
+
 # --- firewall audit ----------------------------------------------------------
 
 

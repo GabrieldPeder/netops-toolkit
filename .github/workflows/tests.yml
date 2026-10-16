@@ -55,3 +55,4 @@ jobs:
           netops --version
           netops subnet 192.168.10.0/24 --json
           netops firewall audit examples/firewall-rules.json --fail-on medium
+          netops vlsm 10.0.0.0/22 --need vendas=200 --need wan=2 --json

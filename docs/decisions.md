@@ -170,3 +170,22 @@ Formato curto: contexto, decisão e alternativas consideradas.
 - **Motivo:** um teste do FW015 revelou que uma regra com origem `any` e destino IPv4 nunca
   era considerada coberta por regras IPv4, porque a parte IPv6 de `any` ficava "descoberta".
   Esse tráfego não existe, então isso era um falso negativo.
+
+## D23 — VLSM como comando próprio, IPv4, /30 por padrão
+
+- **Decisão:** `netops vlsm BLOCO --need nome=hosts ...`. Enlaces de 2 hosts recebem /30;
+  `--use-31` usa /31. Somente IPv4.
+- **Motivo:** transformar `subnet` em grupo (`subnet plan`) quebraria
+  `netops subnet 192.168.10.0/24`, que faz parte da especificação. O /30 é o padrão mais
+  compatível com equipamentos antigos; /31 é opcional. Em IPv6 a prática é um /64 por
+  sub-rede, então o "menor bloco que cabe" não se aplica.
+- **Alternativa:** ler as necessidades de um arquivo YAML. Isso fica para quando houver
+  demanda por planos grandes.
+
+## D24 — CI no Ubuntu e no Windows, Python 3.12 a 3.14
+
+- **Decisão:** matriz de 6 jobs, com permissão somente leitura e cancelamento de execuções
+  antigas.
+- **Motivo:** o projeto declara suporte a Windows e Linux e a Python 3.12 ou superior. O
+  desenvolvimento local usa só Windows com 3.13, então o CI cobre o resto, inclusive
+  diferenças de classificação do `ipaddress` entre versões.

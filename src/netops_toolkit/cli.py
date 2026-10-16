@@ -21,6 +21,7 @@ from netops_toolkit.files import InputFileError
 from netops_toolkit.firewall import FirewallConfig, audit_file, load_firewall_config
 from netops_toolkit.models import AuditResult, Category, Severity
 from netops_toolkit.network import SubnetError, SubnetInfo, calculate_subnet
+from netops_toolkit.vlsm import VlsmError, VlsmPlan, parse_need, plan_vlsm
 
 EXIT_INPUT_ERROR = 1
 EXIT_FINDINGS_THRESHOLD = 3
@@ -105,6 +106,75 @@ def subnet(
         raise typer.Exit(code=EXIT_INPUT_ERROR) from None
 
     typer.echo(info.to_json() if json_output else format_subnet(info))
+
+
+@app.command()
+def vlsm(
+    block: Annotated[
+        str,
+        typer.Argument(
+            help="Bloco IPv4 a ser dividido, ex.: 10.0.0.0/22.", metavar="BLOCO", show_default=False
+        ),
+    ],
+    need: Annotated[
+        list[str],
+        typer.Option(
+            "--need",
+            "-n",
+            help="Necessidade no formato nome=hosts. Repita para cada sub-rede.",
+            metavar="NOME=HOSTS",
+            show_default=False,
+        ),
+    ],
+    use_31: Annotated[
+        bool,
+        typer.Option("--use-31", help="Usa /31 (RFC 3021) para enlaces de até 2 hosts."),
+    ] = False,
+    json_output: Annotated[bool, typer.Option("--json", help="Exibe o resultado em JSON.")] = False,
+) -> None:
+    """Planeja sub-redes IPv4 de tamanhos variáveis (VLSM) dentro de um bloco."""
+    try:
+        plan = plan_vlsm(block, [parse_need(item) for item in need], use_31=use_31)
+    except VlsmError as exc:
+        _fail(str(exc))
+
+    typer.echo(plan.to_json() if json_output else format_vlsm(plan))
+
+
+def format_vlsm(plan: VlsmPlan) -> str:
+    """Formata o plano VLSM como tabela para o terminal."""
+    header = ("Nome", "Hosts", "Rede", "Máscara", "Faixa utilizável", "Broadcast", "Disp.", "Sobra")
+    rows = [
+        (
+            a.name,
+            _format_count(a.hosts_requested),
+            a.network,
+            a.netmask,
+            f"{a.first_usable} - {a.last_usable}",
+            a.broadcast_address or "-",
+            _format_count(a.usable_hosts),
+            _format_count(a.spare_hosts),
+        )
+        for a in plan.allocations
+    ]
+    widths = [max(len(row[i]) for row in [header, *rows]) for i in range(len(header))]
+    table = [
+        "  ".join(cell.ljust(width) for cell, width in zip(row, widths, strict=True)).rstrip()
+        for row in [header, *rows]
+    ]
+
+    lines = [f"Bloco: {plan.block} ({_format_count(plan.total_addresses)} endereços)", ""]
+    lines += table
+    lines += [
+        "",
+        f"Utilização: {_format_count(plan.allocated_addresses)} de "
+        f"{_format_count(plan.total_addresses)} endereços "
+        f"({str(plan.utilization_percent).replace('.', ',')}%)",
+        "Blocos livres: " + (", ".join(plan.free_blocks) if plan.free_blocks else "nenhum"),
+    ]
+    if plan.notes:
+        lines += ["", "Observações:", *[f"  - {note}" for note in plan.notes]]
+    return "\n".join(lines)
 
 
 firewall_app = typer.Typer(

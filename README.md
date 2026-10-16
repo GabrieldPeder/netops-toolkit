@@ -4,9 +4,9 @@ Ferramenta de linha de comando (CLI) em Python com utilitários para profissiona
 infraestrutura e segurança defensiva. Roda 100% local, sem rede, sem serviços externos e sem
 privilégios administrativos.
 
-> **Estado atual (v0.2.0):** **calculadora de sub-redes** e **auditoria de regras de
-> firewall** estão implementadas. Análise de logs e relatórios HTML estão no
-> [roadmap](#roadmap).
+> **Estado atual (v0.3.0):** **calculadora de sub-redes**, **planejamento VLSM** e
+> **auditoria de regras de firewall** estão implementados. Análise de logs e relatórios
+> HTML estão no [roadmap](#roadmap).
 
 ## Problema que o projeto resolve
 
@@ -20,6 +20,7 @@ para humanos e em JSON para automação.
 | Módulo | Comando | Estado |
 |---|---|---|
 | Planejamento de redes IP (IPv4/IPv6) | `netops subnet` | Implementado |
+| Planejamento de múltiplas sub-redes (VLSM, IPv4) | `netops vlsm` | Implementado |
 | Auditoria de regras de firewall (JSON/YAML) | `netops firewall audit` | Implementado |
 | Análise de logs de segurança | `netops logs analyze` | Planejado |
 | Relatórios HTML | `netops report html` | Planejado |
@@ -37,6 +38,15 @@ para humanos e em JSON para automação.
 - Classifica o bloco (privado, público, documentação, loopback, link-local, CGNAT etc.).
 - Aceita endereço de host (ex.: `192.168.10.77/24`), calcula a rede e avisa.
 - Saída em JSON com `--json`.
+
+### Planejamento VLSM
+
+- Divide um bloco IPv4 em sub-redes de tamanhos diferentes a partir de uma lista de
+  necessidades (`--need vendas=200 --need ti=50 ...`).
+- Usa o algoritmo clássico de alocar do maior para o menor, com blocos alinhados e sem
+  lacunas, e mostra rede, máscara, faixa utilizável, broadcast, hosts disponíveis e sobra.
+- Lista o espaço livre restante como blocos CIDR e avisa quando as necessidades não cabem.
+- `--use-31` usa /31 (RFC 3021) em enlaces ponto a ponto; saída em JSON com `--json`.
 
 ### Auditoria de regras de firewall
 
@@ -111,7 +121,10 @@ netops --version
 netops subnet 192.168.10.0/24
 netops subnet 192.168.10.0/24 --json
 netops subnet 2001:db8:abcd:12::/64
+netops vlsm 10.0.0.0/22 --need vendas=200 --need ti=50 --need wan-sp=2
+netops vlsm 10.0.0.0/22 --need vendas=200 --need wan-sp=2 --use-31 --json
 netops firewall audit examples/firewall-rules.json
+netops firewall audit examples/firewall-rules-issues.yaml --config examples/firewall-config.yaml
 netops firewall audit examples/firewall-rules-issues.yaml --json
 netops firewall audit examples/firewall-rules-issues.yaml --output resultado.json
 netops firewall audit examples/firewall-rules-issues.yaml --fail-on high
@@ -211,6 +224,26 @@ Erro: prefixo inválido: /33. IPv4 aceita prefixos de 0 a 32
 O formato do JSON e as regras de cálculo estão em
 [docs/subnet-calculator.md](docs/subnet-calculator.md).
 
+### Exemplo: planejamento VLSM
+
+```text
+> netops vlsm 10.0.0.0/22 --need vendas=200 --need ti=50 --need rh=20 --need wan-sp=2 --need wan-rj=2
+Bloco: 10.0.0.0/22 (1.024 endereços)
+
+Nome    Hosts  Rede           Máscara          Faixa utilizável         Broadcast   Disp.  Sobra
+vendas  200    10.0.0.0/24    255.255.255.0    10.0.0.1 - 10.0.0.254    10.0.0.255  254    54
+ti      50     10.0.1.0/26    255.255.255.192  10.0.1.1 - 10.0.1.62     10.0.1.63   62     12
+rh      20     10.0.1.64/27   255.255.255.224  10.0.1.65 - 10.0.1.94    10.0.1.95   30     10
+wan-sp  2      10.0.1.96/30   255.255.255.252  10.0.1.97 - 10.0.1.98    10.0.1.99   2      0
+wan-rj  2      10.0.1.100/30  255.255.255.252  10.0.1.101 - 10.0.1.102  10.0.1.103  2      0
+
+Utilização: 360 de 1.024 endereços (35,16%)
+Blocos livres: 10.0.1.104/29, 10.0.1.112/28, 10.0.1.128/25, 10.0.2.0/23
+```
+
+O algoritmo e o formato JSON estão em
+[docs/subnet-calculator.md](docs/subnet-calculator.md#planejamento-vlsm).
+
 ### Exemplos: auditoria de firewall
 
 Configuração de referência (`examples/firewall-rules.json`), sem achados:
@@ -285,15 +318,21 @@ limitações estão em [docs/firewall-format.md](docs/firewall-format.md).
 No Linux, troque `.\.venv\Scripts\python.exe` por `.venv/bin/python`.
 Veja [docs/testing.md](docs/testing.md).
 
+O workflow [`.github/workflows/tests.yml`](.github/workflows/tests.yml) executa Ruff,
+pytest e um teste de fumaça da CLI no Ubuntu e no Windows, com Python 3.12, 3.13 e 3.14, a
+cada push e pull request na `main`.
+
 ## Estrutura do projeto
 
 ```text
 netops-toolkit/
+├── .github/workflows/
+│   └── tests.yml             # CI: Ruff + pytest (Ubuntu/Windows, Python 3.12-3.14)
 ├── docs/
 │   ├── architecture.md       # visão geral da arquitetura
 │   ├── decisions.md          # registro das decisões técnicas
 │   ├── firewall-format.md    # formato das regras e critérios de detecção
-│   ├── subnet-calculator.md  # regras de cálculo e formato JSON
+│   ├── subnet-calculator.md  # cálculo de sub-redes, VLSM e formatos JSON
 │   └── testing.md            # como e o que é testado
 ├── examples/
 │   ├── firewall-rules.json         # configuração de referência (sem achados)
@@ -306,6 +345,7 @@ netops-toolkit/
 │   ├── files.py              # leitura segura de JSON/YAML (compartilhada)
 │   ├── models.py             # Finding, Severity, Category, AuditResult
 │   ├── network.py            # cálculo de sub-redes (lógica pura)
+│   ├── vlsm.py               # planejamento VLSM
 │   └── firewall/
 │       ├── config.py         # configuração da auditoria (--config)
 │       ├── schema.py         # modelo das regras e validação
@@ -315,7 +355,8 @@ netops-toolkit/
 │   ├── test_cli.py
 │   ├── test_files.py
 │   ├── test_firewall.py
-│   └── test_network.py
+│   ├── test_network.py
+│   └── test_vlsm.py
 ├── .gitattributes
 ├── .gitignore
 ├── LICENSE
@@ -323,7 +364,7 @@ netops-toolkit/
 └── README.md
 ```
 
-Novos arquivos (`logs.py`, `reports.py`, CI) serão adicionados nas fases correspondentes.
+Novos arquivos (`logs/`, `reports.py`) serão adicionados nas fases correspondentes.
 
 ## Limitações conhecidas
 
@@ -332,7 +373,7 @@ Novos arquivos (`logs.py`, `reports.py`, CI) serão adicionados nas fases corres
   (`/255.255.255.0`) é recusada de propósito.
 - A classificação do tipo de endereço usa o módulo `ipaddress`; versões diferentes do
   Python podem classificar alguns blocos especiais de forma ligeiramente diferente.
-- Ainda não há planejamento de múltiplas sub-redes (VLSM).
+- VLSM somente em IPv4, sem reserva automática para crescimento.
 - Auditoria de firewall: formato próprio (não lê configurações de fabricantes), análise só
   de porta de destino, e sobreposição parcial com ações opostas não é apontada. Detalhes
   em [docs/firewall-format.md](docs/firewall-format.md#4-limitações-e-falsos-positivosnegativos-conhecidos).
@@ -348,13 +389,15 @@ alertas heurísticos e recomendações. Os resultados sempre precisam de interpr
 
 - [x] Fase 1 — Fundação (pacote, CLI, testes, lint)
 - [x] Fase 2 — Calculadora de sub-redes IPv4/IPv6 com saída JSON
-- [ ] Fase 2+ — Planejamento de múltiplas sub-redes (VLSM)
+- [x] Fase 2+ — Planejamento de múltiplas sub-redes IPv4 (VLSM)
 - [x] Fase 3 — Auditoria de regras de firewall (JSON/YAML)
 - [x] Fase 3+ — Serviços sensíveis e limites configuráveis (`--config`); detecção de
   cobertura pela combinação de regras (FW015)
+- [x] CI — GitHub Actions com Ruff e pytest (Ubuntu/Windows, Python 3.12-3.14)
 - [ ] Fase 4 — Análise de logs de segurança (JSON Lines)
 - [ ] Fase 5 — Relatórios JSON/HTML compartilhados
-- [ ] Fase 6 — GitHub Actions, revisão final e instalação limpa
+- [ ] Fase 6 — Revisão final, instalação limpa e auditoria de segredos
+- [ ] Futuro — VLSM em IPv6 (planejamento por /64), reserva de crescimento no VLSM
 
 ## Licença
 

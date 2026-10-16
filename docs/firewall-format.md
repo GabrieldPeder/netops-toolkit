@@ -191,7 +191,7 @@ thresholds:
 ```json
 {
   "module": "firewall",
-  "tool_version": "0.2.0",
+  "tool_version": "0.3.0",
   "generated_at": "2026-10-16T14:00:00+00:00",
   "input_file": "firewall-rules-issues.yaml",
   "summary": {
